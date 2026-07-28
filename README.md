@@ -1,19 +1,29 @@
-# :earth_americas: GDP dashboard template
+# :camera_with_flash: PhotoShare
 
-A simple Streamlit app showing the GDP of different countries in the world.
+A photo sharing gallery app built with [Streamlit](https://streamlit.io).
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://gdp-dashboard-template.streamlit.app/)
+## Features
 
-### How to run it on your own machine
+**Community Feed** — browse photos that people publish online:
+- ❤️ Like and 💔 dislike photos (vote again to withdraw, or switch your vote)
+- 💬 Comment on any photo
+- ➕ Follow / unfollow photographers, and filter the feed to only people you follow
 
-1. Install the requirements
+**My Gallery** — your private area with all of your photos:
+- ⬆️ Upload photos (png / jpg / gif / webp)
+- ❤️ Like, 🔖 Mark and 📌 Keep photos — kept photos are protected from removal
+- 🗑️ Remove photos (deletes the image and takes it off the feed if published)
+- 🌍 Publish photos to the Community Feed, or unpublish them again
+- Filter your gallery by Liked / Marked / Kept / Published
 
-   ```
-   $ pip install -r requirements.txt
-   ```
+**People** — see every photographer, their stats, and follow them from one place.
 
-2. Run the app
+Every action is persisted to `data/photoshare.json` (and uploads to
+`data/uploads/`), so your gallery actually changes and survives restarts.
 
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+## Run it locally
+
+```
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
