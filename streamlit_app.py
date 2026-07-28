@@ -47,25 +47,131 @@ IG_RING = ('conic-gradient(from 210deg,#f09433,#e6683c,#dc2743,'
 
 
 # -----------------------------------------------------------------------------
-# Generated images (demo photos + avatars)
+# Generated images (procedural photos + avatars)
 
-def _make_demo_image(path, top, bottom, accent):
-    """Draw a small scenic placeholder (gradient sky, sun, hills) locally,
-    so the demo feed never depends on an internet image service."""
-    w, h = 720, 480
-    img = Image.new('RGB', (w, h))
-    draw = ImageDraw.Draw(img)
+def _hsv(h, s, v):
+    return tuple(round(c * 255) for c in colorsys.hsv_to_rgb(h % 1.0, s, v))
+
+
+def _vgrad(draw, w, h, c1, c2):
     for y in range(h):
         t = y / (h - 1)
-        color = tuple(round(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
-        draw.line([(0, y), (w, y)], fill=color)
-    sun = tuple(min(255, c + 70) for c in accent)
-    draw.ellipse([w * 0.68, h * 0.14, w * 0.68 + 90, h * 0.14 + 90], fill=sun)
-    for layer, (amp, base) in enumerate([(40, 0.68), (55, 0.8), (70, 0.92)]):
-        shade = tuple(max(0, round(c * (0.85 - 0.22 * layer))) for c in accent)
-        points = [(x, h * base + amp * math.sin(x / 90 + layer * 2))
-                  for x in range(0, w + 1, 8)]
-        draw.polygon(points + [(w, h), (0, h)], fill=shade)
+        draw.line([(0, y), (w, y)],
+                  fill=tuple(round(c1[i] + (c2[i] - c1[i]) * t) for i in range(3)))
+
+
+def _hills(draw, w, h, rng, base_color, layers=3, start=0.6):
+    for layer in range(layers):
+        base = start + (0.98 - start) * layer / max(1, layers - 1)
+        amp = rng.uniform(30, 80)
+        freq = rng.uniform(70, 140)
+        phase = rng.uniform(0, 10)
+        v = max(0.06, 0.5 - 0.16 * layer)
+        shade = tuple(round(c * v) for c in base_color)
+        pts = [(x, h * base + amp * math.sin(x / freq + phase))
+               for x in range(0, w + 1, 6)]
+        draw.polygon(pts + [(w, h), (0, h)], fill=shade)
+
+
+def generate_photo(path, seed):
+    """Paint a vivid procedural 'photo' (portrait, feed-ready) from a seed.
+
+    Six scene types with randomized palettes give the feed endless variety
+    without depending on any internet image service.
+    """
+    rng = random.Random(seed)
+    w, h = 720, 900
+    img = Image.new('RGB', (w, h))
+    draw = ImageDraw.Draw(img, 'RGBA')
+    hue = rng.random()
+    scene = rng.choice(['ridge', 'ocean', 'night', 'city', 'dunes', 'bokeh'])
+
+    if scene == 'ridge':
+        _vgrad(draw, w, h, _hsv(hue, 0.5, 0.98), _hsv(hue + 0.09, 0.85, 0.75))
+        r = rng.uniform(50, 90)
+        cx, cy = rng.uniform(0.2, 0.8) * w, rng.uniform(0.12, 0.3) * h
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=_hsv(hue + 0.04, 0.25, 1.0))
+        _hills(draw, w, h, rng, _hsv(hue + 0.5, 0.6, 1.0), layers=4, start=0.55)
+
+    elif scene == 'ocean':
+        horizon = h * rng.uniform(0.45, 0.6)
+        _vgrad(draw, w, int(horizon), _hsv(hue, 0.45, 1.0), _hsv(hue + 0.06, 0.7, 0.85))
+        sea = Image.new('RGB', (w, h - int(horizon)))
+        _vgrad(ImageDraw.Draw(sea), w, h - int(horizon),
+               _hsv(hue + 0.55, 0.65, 0.55), _hsv(hue + 0.6, 0.7, 0.2))
+        img.paste(sea, (0, int(horizon)))
+        r = rng.uniform(45, 75)
+        cx = rng.uniform(0.25, 0.75) * w
+        draw.ellipse([cx - r, horizon - r * 2.2, cx + r, horizon - r * 0.2],
+                     fill=_hsv(hue + 0.02, 0.2, 1.0))
+        for i in range(26):  # shimmering reflection
+            y = horizon + 8 + i * rng.uniform(8, 14)
+            if y > h - 4:
+                break
+            half = rng.uniform(20, 90) * (1 + i / 8)
+            draw.line([(cx - half, y), (cx + half, y)],
+                      fill=(255, 255, 235, rng.randint(40, 110)), width=3)
+
+    elif scene == 'night':
+        _vgrad(draw, w, h, _hsv(0.62 + rng.uniform(-0.05, 0.05), 0.85, 0.25),
+               _hsv(0.7, 0.9, 0.06))
+        for _ in range(rng.randint(160, 260)):  # stars
+            x, y = rng.uniform(0, w), rng.uniform(0, h * 0.85)
+            s = rng.uniform(0.6, 2.2)
+            draw.ellipse([x - s, y - s, x + s, y + s],
+                         fill=(255, 255, 255, rng.randint(90, 220)))
+        if rng.random() < 0.7:  # aurora bands
+            ah = rng.choice([0.33, 0.45, 0.78])
+            for band in range(3):
+                pts = [(x, h * (0.25 + 0.1 * band)
+                        + 60 * math.sin(x / rng.uniform(90, 150) + band))
+                       for x in range(0, w + 1, 8)]
+                draw.line(pts, fill=_hsv(ah + band * 0.05, 0.8, 0.9) + (60,), width=44)
+        r = rng.uniform(35, 60)
+        cx, cy = rng.uniform(0.15, 0.85) * w, rng.uniform(0.1, 0.3) * h
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(240, 240, 225, 235))
+        _hills(draw, w, h, rng, _hsv(0.65, 0.5, 1.0), layers=2, start=0.82)
+
+    elif scene == 'city':
+        _vgrad(draw, w, h, _hsv(hue, 0.6, 0.95), _hsv(hue + 0.1, 0.85, 0.4))
+        x = 0
+        while x < w:
+            bw = rng.randint(50, 110)
+            bh = rng.randint(int(h * 0.25), int(h * 0.62))
+            top = h - bh
+            draw.rectangle([x, top, x + bw, h], fill=_hsv(hue + 0.5, 0.3, rng.uniform(0.04, 0.1)))
+            for wy in range(top + 14, h - 10, 26):  # lit windows
+                for wx in range(x + 8, x + bw - 10, 20):
+                    if rng.random() < 0.45:
+                        draw.rectangle([wx, wy, wx + 8, wy + 12],
+                                       fill=_hsv(0.12, 0.5, 1.0) + (rng.randint(150, 255),))
+            x += bw + rng.randint(6, 24)
+
+    elif scene == 'dunes':
+        warm = 0.06 + rng.uniform(-0.03, 0.05)
+        _vgrad(draw, w, h, _hsv(warm, 0.45, 1.0), _hsv(warm + 0.05, 0.8, 0.85))
+        r = rng.uniform(50, 80)
+        cx, cy = rng.uniform(0.2, 0.8) * w, rng.uniform(0.1, 0.25) * h
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=_hsv(warm, 0.15, 1.0))
+        for layer in range(4):
+            base = 0.5 + 0.13 * layer
+            amp = rng.uniform(40, 90)
+            freq = rng.uniform(120, 220)
+            phase = rng.uniform(0, 10)
+            col = _hsv(warm + 0.02 * layer, 0.75, 0.9 - 0.18 * layer)
+            pts = [(x, h * base + amp * math.sin(x / freq + phase))
+                   for x in range(0, w + 1, 6)]
+            draw.polygon(pts + [(w, h), (0, h)], fill=col)
+
+    else:  # bokeh
+        _vgrad(draw, w, h, _hsv(hue, 0.7, 0.35), _hsv(hue + 0.15, 0.8, 0.12))
+        for _ in range(rng.randint(22, 34)):
+            r = rng.uniform(18, 110)
+            x, y = rng.uniform(-40, w + 40), rng.uniform(-40, h + 40)
+            draw.ellipse([x - r, y - r, x + r, y + r],
+                         fill=_hsv(hue + rng.uniform(-0.12, 0.2), 0.75, 1.0)
+                         + (rng.randint(30, 90),))
+
     img.save(path, 'JPEG', quality=88)
 
 
@@ -113,41 +219,94 @@ def avatar_img(username, px=38):
 
 
 # -----------------------------------------------------------------------------
+# Unlimited content
+
+CAPTIONS = [
+    'Golden hour hits different', 'No edit, no filter', 'Lost in the moment',
+    "Can't stop looking at this", 'From last night 🌙', 'POV: you were there',
+    'This view >>> everything', 'Chasing light again', 'Little slice of heaven',
+    'Still thinking about this place', 'Main character energy', 'Just wow',
+    'Took the long way home', 'The sky said show off', 'Unreal, honestly',
+    'Blink and you miss it', 'Saved this one for you', 'Weekend reset',
+    'Colors were not real', 'Had to stop the car for this',
+]
+
+HANDLE_A = ['wander', 'pixel', 'urban', 'golden', 'misty', 'wild', 'neon',
+            'drift', 'lunar', 'salty', 'vivid', 'nomad', 'echo', 'cosmic']
+HANDLE_B = ['lens', 'frames', 'shots', 'visuals', 'roam', 'light', 'tales',
+            'chaser', 'diary', 'mood', 'gaze', 'wave', 'films', 'story']
+
+COMMENT_POOL = [
+    'Insane 😍', 'How is this real', 'Teach me your ways', 'Wallpaper. Now.',
+    'This one goes hard', 'Take me there', 'Obsessed with this',
+    'The colors!!', 'Stop it, this is too good', 'Instant classic',
+]
+
+
+def _random_handle(rng, taken):
+    for _ in range(50):
+        handle = rng.choice(HANDLE_A) + rng.choice(['.', '_', '']) + rng.choice(HANDLE_B)
+        if handle not in taken and handle != ME:
+            return handle
+    return f'creator_{rng.randint(100, 999)}'
+
+
+def make_feed_photo(author, caption=None, likes=None, dislikes=None,
+                    comments=None, views=None, rng=None):
+    rng = rng or random
+    photo_id = uuid.uuid4().hex
+    filename = f'demo/{photo_id}.jpg'
+    generate_photo(DATA_DIR / filename, photo_id)
+    likes = rng.randint(40, 9000) if likes is None else likes
+    return {
+        'id': photo_id,
+        'author': author,
+        'file': filename,         # path relative to data/
+        'caption': caption or rng.choice(CAPTIONS),
+        'likes': likes,
+        'dislikes': rng.randint(0, 20) if dislikes is None else dislikes,
+        'views': likes * rng.randint(12, 40) if views is None else views,
+        'my_vote': None,          # None | 'like' | 'dislike'
+        'comments': comments if comments is not None else [
+            {'author': a, 'text': rng.choice(COMMENT_POOL),
+             'time': datetime.now().isoformat(timespec='seconds')}
+            for a in rng.sample(list(store['users']) or ['ava_shoots'],
+                                k=min(rng.randint(0, 2), len(store['users'])))
+        ] if 'store' in st.session_state else [],
+        'posted_at': datetime.now().isoformat(timespec='seconds'),
+    }
+
+
+def extend_feed(count=4):
+    """Generate fresh photos (and sometimes fresh creators) so the For You
+    feed never runs out."""
+    rng = random.Random()
+    for _ in range(count):
+        if rng.random() < 0.3 or not store['users']:
+            handle = _random_handle(rng, store['users'])
+            store['users'][handle] = {
+                'name': handle.replace('.', ' ').replace('_', ' ').title(),
+                'bio': rng.choice(['Shoots on anything', 'Light collector',
+                                   'Somewhere new every week', 'Mostly moments',
+                                   'Catch me outside', 'Frames over followers']),
+            }
+        author = rng.choice([u for u in store['users']])
+        store['feed_photos'].append(make_feed_photo(author, rng=rng))
+    save_store()
+
+
+# -----------------------------------------------------------------------------
 # Persistence
 
 def _seed_store():
     """Initial data: a few demo people who already published photos online."""
 
-    palettes = [
-        ((255, 183, 94), (255, 94, 98), (120, 60, 90)),    # sunset
-        ((160, 196, 255), (222, 235, 255), (70, 110, 140)),  # misty morning
-        ((60, 70, 120), (20, 24, 50), (90, 80, 140)),      # night
-        ((190, 230, 195), (245, 250, 220), (60, 130, 90)),  # spring
-        ((250, 214, 165), (240, 150, 120), (150, 100, 70)),  # desert
-        ((140, 200, 220), (230, 245, 250), (60, 120, 150)),  # lake
-        ((255, 210, 130), (180, 120, 160), (110, 70, 110)),  # dusk
-        ((205, 220, 240), (150, 170, 200), (80, 100, 130)),  # overcast
-    ]
-    seeded = iter(palettes)
     rng = random.Random(44)
 
     def feed_photo(author, caption, likes, dislikes, comments):
-        photo_id = uuid.uuid4().hex
-        filename = f'demo/{photo_id}.jpg'
-        top, bottom, accent = next(seeded)
-        _make_demo_image(DATA_DIR / filename, top, bottom, accent)
-        return {
-            'id': photo_id,
-            'author': author,
-            'file': filename,         # path relative to data/
-            'caption': caption,
-            'likes': likes,
-            'dislikes': dislikes,
-            'views': rng.randint(1500, 42000),
-            'my_vote': None,          # None | 'like' | 'dislike'
-            'comments': comments,     # [{author, text, time}]
-            'posted_at': datetime.now().isoformat(timespec='seconds'),
-        }
+        photo = make_feed_photo(author, caption, likes, dislikes, comments, rng=rng)
+        photo['views'] = rng.randint(1500, 42000)
+        return photo
 
     def comment(author, text):
         return {'author': author, 'text': text,
@@ -307,8 +466,13 @@ def toggle_publish(photo):
     save_store()
 
 
-def fy_step(step, total):
-    st.session_state.fy_idx = (st.session_state.get('fy_idx', 0) + step) % total
+def fy_step(step):
+    idx = max(0, st.session_state.get('fy_idx', 0) + step)
+    # Generate more content before the viewer reaches the end — the feed
+    # is effectively unlimited.
+    if idx >= len(store['feed_photos']) - 2:
+        extend_feed()
+    st.session_state.fy_idx = min(idx, len(store['feed_photos']) - 1)
 
 
 # -----------------------------------------------------------------------------
@@ -559,12 +723,12 @@ def page_feed():
 
         p, pos, n = st.columns([2, 3, 2])
         p.button('⬆️ Previous', key='fy_prev',
-                 on_click=fy_step, args=(-1, len(photos)),
+                 on_click=fy_step, args=(-1,),
                  use_container_width=True)
         pos.markdown(f"<div style='text-align:center' class='muted'>"
-                     f"{idx + 1} / {len(photos)}</div>", unsafe_allow_html=True)
+                     f"{idx + 1} / ∞</div>", unsafe_allow_html=True)
         n.button('⬇️ Next', key='fy_next',
-                 on_click=fy_step, args=(1, len(photos)),
+                 on_click=fy_step, args=(1,),
                  use_container_width=True, type='primary')
 
     else:  # Following feed

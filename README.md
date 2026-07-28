@@ -17,7 +17,10 @@ A photo sharing gallery app with a TikTok/Instagram-inspired look, built with
 
 **✨ For You** — TikTok-style pager: one photo at a time with an action rail
 (follow ➕, like ❤️, dislike 💔, comments 💬) and ⬆️/⬇️ navigation, plus
-view counts.
+view counts. The feed is **unlimited** — new photos (and sometimes brand-new
+creators) are procedurally generated just before you reach the end, across six
+scene types: sunset ridges, ocean reflections, starry nights with auroras,
+city skylines, desert dunes and bokeh abstracts.
 
 **🏠 Following** — Instagram-style feed of people you follow:
 - Stories bar with gradient rings and generated avatars
