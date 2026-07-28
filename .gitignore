@@ -166,3 +166,4 @@ cython_debug/
 data/photoshare.json
 data/uploads/
 data/demo/
+data/avatars/
