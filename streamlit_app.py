@@ -1,458 +1,567 @@
-"""PhotoShare — a photo sharing gallery app.
+"""PulsePlay — a short-video feed and an AI chat assistant in one app.
 
 Two areas:
-  * Community Feed: browse photos people publish online. Like, dislike,
-    comment on photos and follow/unfollow their authors.
-  * My Gallery (private): upload and view all of your own photos. Like,
-    mark, keep, remove and publish them — every action is persisted, so
-    your gallery really changes.
-
-All state is stored in ``data/photoshare.json`` and uploaded images in
-``data/uploads/`` so everything survives reloads and restarts.
+  * For You: a TikTok-style vertical video feed in a phone frame — snap
+    scrolling, autoplay, double-tap to like, comments, share, follow.
+    Likes/comments persist in the browser (localStorage). You can also
+    add your own video to the feed for the current session.
+  * AI Chat: a ChatGPT-style chat with a conversation sidebar. Switch
+    between Claude (Anthropic API) and GPT (OpenAI API). A built-in demo
+    assistant answers when no API key is configured, so the app always
+    works. Conversations persist in ``data/chats.json``.
 """
 
 import json
-import math
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
-from PIL import Image, ImageDraw
+import streamlit.components.v1 as components
 
-st.set_page_config(
-    page_title='PhotoShare',
-    page_icon='📸',
-    layout='wide',
-)
+st.set_page_config(page_title='PulsePlay', page_icon='⚡', layout='wide')
 
 DATA_DIR = Path(__file__).parent / 'data'
-UPLOAD_DIR = DATA_DIR / 'uploads'
-DEMO_DIR = DATA_DIR / 'demo'
-STORE_FILE = DATA_DIR / 'photoshare.json'
+DATA_DIR.mkdir(exist_ok=True)
+CHATS_FILE = DATA_DIR / 'chats.json'
 
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-DEMO_DIR.mkdir(parents=True, exist_ok=True)
+CLAUDE_MODEL = 'claude-opus-5'
+OPENAI_MODEL = 'gpt-4o'
 
-ME = 'you'
-
-
-def _make_demo_image(path, top, bottom, accent):
-    """Draw a small scenic placeholder (gradient sky, sun, hills) locally,
-    so the demo feed never depends on an internet image service."""
-    w, h = 720, 480
-    img = Image.new('RGB', (w, h))
-    draw = ImageDraw.Draw(img)
-    for y in range(h):
-        t = y / (h - 1)
-        color = tuple(round(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
-        draw.line([(0, y), (w, y)], fill=color)
-    # sun / moon
-    sun = tuple(min(255, c + 70) for c in accent)
-    draw.ellipse([w * 0.68, h * 0.14, w * 0.68 + 90, h * 0.14 + 90], fill=sun)
-    # rolling hills
-    for layer, (amp, base) in enumerate([(40, 0.68), (55, 0.8), (70, 0.92)]):
-        shade = tuple(max(0, round(c * (0.85 - 0.22 * layer))) for c in accent)
-        points = [(x, h * base + amp * math.sin(x / 90 + layer * 2))
-                  for x in range(0, w + 1, 8)]
-        draw.polygon(points + [(w, h), (0, h)], fill=shade)
-    img.save(path, 'JPEG', quality=88)
+SYSTEM_PROMPT = (
+    'You are a helpful, friendly AI assistant inside PulsePlay, an app that '
+    'combines a short-video feed with an AI chat. Answer clearly and '
+    'concisely, use markdown when it helps, and match the length of your '
+    'answer to the question.'
+)
 
 
-# -----------------------------------------------------------------------------
-# Persistence
+# ---------------------------------------------------------------------------
+# Chat storage
+# ---------------------------------------------------------------------------
 
-def _seed_store():
-    """Initial data: a few demo people who already published photos online."""
+def load_chats():
+    if CHATS_FILE.exists():
+        try:
+            return json.loads(CHATS_FILE.read_text())
+        except json.JSONDecodeError:
+            pass
+    return {'order': [], 'chats': {}}
 
-    palettes = [
-        ((255, 183, 94), (255, 94, 98), (120, 60, 90)),    # sunset
-        ((160, 196, 255), (222, 235, 255), (70, 110, 140)),  # misty morning
-        ((60, 70, 120), (20, 24, 50), (90, 80, 140)),      # night
-        ((190, 230, 195), (245, 250, 220), (60, 130, 90)),  # spring
-        ((250, 214, 165), (240, 150, 120), (150, 100, 70)),  # desert
-        ((140, 200, 220), (230, 245, 250), (60, 120, 150)),  # lake
-        ((255, 210, 130), (180, 120, 160), (110, 70, 110)),  # dusk
-        ((205, 220, 240), (150, 170, 200), (80, 100, 130)),  # overcast
-    ]
-    seeded = iter(palettes)
 
-    def feed_photo(author, caption, likes, dislikes, comments):
-        photo_id = uuid.uuid4().hex
-        filename = f'demo/{photo_id}.jpg'
-        top, bottom, accent = next(seeded)
-        _make_demo_image(DATA_DIR / filename, top, bottom, accent)
-        return {
-            'id': photo_id,
-            'author': author,
-            'file': filename,         # path relative to data/
-            'caption': caption,
-            'likes': likes,
-            'dislikes': dislikes,
-            'my_vote': None,          # None | 'like' | 'dislike'
-            'comments': comments,     # [{author, text, time}]
-            'posted_at': datetime.now().isoformat(timespec='seconds'),
-        }
+def save_chats(store):
+    CHATS_FILE.write_text(json.dumps(store, indent=1))
 
-    def comment(author, text):
-        return {'author': author, 'text': text,
-                'time': datetime.now().isoformat(timespec='seconds')}
 
-    return {
-        'users': {
-            'ava_shoots': {'name': 'Ava Torres', 'bio': 'Landscapes & light chasing'},
-            'liam.frames': {'name': 'Liam Chen', 'bio': 'Street photography, mostly rain'},
-            'maya_lens': {'name': 'Maya Okafor', 'bio': 'Food, travel and tiny details'},
-            'noah_wild': {'name': 'Noah Berg', 'bio': 'Wildlife and the great outdoors'},
-        },
-        'following': [],
-        'my_photos': [],   # photos in your private gallery
-        'feed_photos': [
-            feed_photo('ava_shoots', 'River bend at golden hour', 42, 1,
-                       [comment('liam.frames', 'That light is unreal!')]),
-            feed_photo('ava_shoots', 'Fog rolling over the ridge', 31, 0, []),
-            feed_photo('liam.frames', 'Quiet night in the city', 27, 2,
-                       [comment('maya_lens', 'So peaceful 😍'),
-                        comment('noah_wild', 'Where is this?')]),
-            feed_photo('liam.frames', 'First green of spring', 18, 3, []),
-            feed_photo('maya_lens', 'Dunes going on forever', 55, 2,
-                       [comment('ava_shoots', 'The composition here!')]),
-            feed_photo('maya_lens', 'Morning at the lake', 23, 0, []),
-            feed_photo('noah_wild', 'Dusk over the valley', 68, 1,
-                       [comment('ava_shoots', 'Incredible shot'),
-                        comment('liam.frames', 'Worth the wait I bet')]),
-            feed_photo('noah_wild', 'Storm rolling in', 39, 0, []),
-        ],
+def new_chat(store):
+    cid = uuid.uuid4().hex[:12]
+    store['chats'][cid] = {
+        'title': 'New chat',
+        'created': datetime.now().isoformat(timespec='seconds'),
+        'messages': [],
     }
+    store['order'].insert(0, cid)
+    save_chats(store)
+    return cid
 
 
-def load_store():
-    if 'store' not in st.session_state:
-        if STORE_FILE.exists():
-            st.session_state.store = json.loads(STORE_FILE.read_text())
-        else:
-            st.session_state.store = _seed_store()
-            save_store()
-    return st.session_state.store
+# ---------------------------------------------------------------------------
+# Assistants
+# ---------------------------------------------------------------------------
+
+def get_secret(name):
+    val = os.environ.get(name, '')
+    if not val:
+        try:
+            val = st.secrets.get(name, '')
+        except Exception:
+            val = ''
+    return val
 
 
-def save_store():
-    STORE_FILE.write_text(json.dumps(st.session_state.store, indent=2))
+def stream_claude(api_key, messages):
+    """Stream a reply from Claude. Yields text chunks; sets
+    st.session_state['_stop_reason'] afterwards."""
+    import anthropic
 
-
-store = load_store()
-
-
-# -----------------------------------------------------------------------------
-# Actions (each mutates the store and saves it, so changes are permanent)
-
-def toggle_follow(username):
-    if username in store['following']:
-        store['following'].remove(username)
-    else:
-        store['following'].append(username)
-    save_store()
-
-
-def vote_feed(photo, vote):
-    """Like/dislike a feed photo. Voting again withdraws it, switching swaps it."""
-    prev = photo['my_vote']
-    if prev == 'like':
-        photo['likes'] -= 1
-    elif prev == 'dislike':
-        photo['dislikes'] -= 1
-    if prev == vote:
-        photo['my_vote'] = None
-    else:
-        photo['my_vote'] = vote
-        photo['likes' if vote == 'like' else 'dislikes'] += 1
-    save_store()
-
-
-def add_comment(photo, key):
-    text = st.session_state.get(key, '').strip()
-    if text:
-        photo['comments'].append({
-            'author': ME,
-            'text': text,
-            'time': datetime.now().isoformat(timespec='seconds'),
-        })
-        st.session_state[key] = ''
-        save_store()
-
-
-def add_my_photos(files, caption):
-    for f in files:
-        ext = Path(f.name).suffix.lower() or '.jpg'
-        photo_id = uuid.uuid4().hex
-        (UPLOAD_DIR / f'{photo_id}{ext}').write_bytes(f.getbuffer())
-        store['my_photos'].append({
-            'id': photo_id,
-            'file': f'uploads/{photo_id}{ext}',
-            'title': caption.strip() or Path(f.name).stem,
-            'liked': False,
-            'marked': False,
-            'kept': False,
-            'published': False,
-            'uploaded_at': datetime.now().isoformat(timespec='seconds'),
-        })
-    save_store()
-
-
-def toggle_my(photo, flag):
-    photo[flag] = not photo[flag]
-    save_store()
-
-
-def remove_my(photo):
-    path = DATA_DIR / photo['file']
-    if path.exists():
-        path.unlink()
-    store['my_photos'] = [p for p in store['my_photos'] if p['id'] != photo['id']]
-    # Also take it off the public feed if it was published there.
-    store['feed_photos'] = [p for p in store['feed_photos']
-                            if p.get('gallery_id') != photo['id']]
-    save_store()
-
-
-def toggle_publish(photo):
-    if photo['published']:
-        store['feed_photos'] = [p for p in store['feed_photos']
-                                if p.get('gallery_id') != photo['id']]
-        photo['published'] = False
-    else:
-        store['feed_photos'].insert(0, {
-            'id': uuid.uuid4().hex,
-            'gallery_id': photo['id'],
-            'author': ME,
-            'file': photo['file'],
-            'caption': photo['title'],
-            'likes': 0,
-            'dislikes': 0,
-            'my_vote': None,
-            'comments': [],
-            'posted_at': datetime.now().isoformat(timespec='seconds'),
-        })
-        photo['published'] = True
-    save_store()
-
-
-# -----------------------------------------------------------------------------
-# UI helpers
-
-def show_photo(photo):
-    """Render a feed or gallery photo image from the data directory."""
-    path = DATA_DIR / photo['file']
-    if path.exists():
-        st.image(str(path), use_container_width=True)
-    else:
-        st.caption('_(image file missing)_')
-
-
-def author_label(username):
-    if username == ME:
-        return 'You'
-    user = store['users'].get(username)
-    return f"{user['name']} (@{username})" if user else f'@{username}'
-
-
-# -----------------------------------------------------------------------------
-# Pages
-
-def community_feed():
-    st.title('📸 Community Feed')
-    st.caption('Photos people published online. Like, dislike, comment and follow.')
-
-    only_following = st.toggle(
-        f'Only people I follow ({len(store["following"])})',
-        value=False,
+    client = anthropic.Anthropic(api_key=api_key)
+    kwargs = dict(
+        model=CLAUDE_MODEL,
+        max_tokens=16000,
+        system=SYSTEM_PROMPT,
+        messages=[{'role': m['role'], 'content': m['content']} for m in messages],
     )
-
-    photos = store['feed_photos']
-    if only_following:
-        photos = [p for p in photos if p['author'] in store['following']]
-        if not photos:
-            st.info('You are not following anyone yet — or the people you follow '
-                    'have not published photos. Turn the toggle off to browse everyone.')
-            return
-
-    for photo in photos:
-        with st.container(border=True):
-            img_col, side_col = st.columns([2, 1])
-
-            with img_col:
-                show_photo(photo)
-
-            with side_col:
-                st.subheader(photo['caption'])
-                st.write(f"by **{author_label(photo['author'])}**")
-
-                if photo['author'] != ME:
-                    following = photo['author'] in store['following']
-                    st.button(
-                        '✓ Following' if following else '➕ Follow',
-                        key=f"follow_{photo['id']}",
-                        type='secondary' if following else 'primary',
-                        on_click=toggle_follow, args=(photo['author'],),
-                    )
-
-                like_col, dislike_col = st.columns(2)
-                liked = photo['my_vote'] == 'like'
-                disliked = photo['my_vote'] == 'dislike'
-                like_col.button(
-                    f"{'❤️' if liked else '🤍'} {photo['likes']}",
-                    key=f"like_{photo['id']}",
-                    help='Like this photo',
-                    on_click=vote_feed, args=(photo, 'like'),
-                )
-                dislike_col.button(
-                    f"{'👎' if disliked else '💔'} {photo['dislikes']}",
-                    key=f"dislike_{photo['id']}",
-                    help='Dislike this photo',
-                    on_click=vote_feed, args=(photo, 'dislike'),
-                )
-
-                with st.expander(f"💬 Comments ({len(photo['comments'])})"):
-                    for c in photo['comments']:
-                        st.markdown(f"**{author_label(c['author'])}**: {c['text']}")
-                    comment_key = f"comment_{photo['id']}"
-                    st.text_input('Add a comment', key=comment_key,
-                                  placeholder='Say something nice…',
-                                  label_visibility='collapsed')
-                    st.button('Post', key=f"post_{photo['id']}",
-                              on_click=add_comment, args=(photo, comment_key))
-
-
-def my_gallery():
-    st.title('🖼️ My Gallery')
-    st.caption('Your private space. Only photos you publish appear in the feed.')
-
-    # --- Upload -------------------------------------------------------------
-    with st.expander('⬆️ Add photos to your gallery', expanded=not store['my_photos']):
-        uploader_key = f"uploader_{st.session_state.get('uploader_round', 0)}"
-        files = st.file_uploader(
-            'Choose images', type=['png', 'jpg', 'jpeg', 'gif', 'webp'],
-            accept_multiple_files=True, key=uploader_key,
+    try:
+        # Server-side refusal fallback: if Claude's safety classifiers
+        # decline, the API retries the request on a fallback model.
+        stream_cm = client.beta.messages.stream(
+            betas=['server-side-fallback-2026-07-01'],
+            extra_body={'fallbacks': 'default'},
+            **kwargs,
         )
-        caption = st.text_input('Title (optional, applies to this upload)')
-        if st.button('Add to gallery', type='primary', disabled=not files):
-            add_my_photos(files, caption)
-            # Change the uploader key so the same files aren't re-added on rerun.
-            st.session_state['uploader_round'] = st.session_state.get('uploader_round', 0) + 1
+    except TypeError:
+        stream_cm = client.messages.stream(**kwargs)
+
+    with stream_cm as stream:
+        for text in stream.text_stream:
+            yield text
+        final = stream.get_final_message()
+    if final.stop_reason == 'refusal':
+        yield ('\n\n*Claude declined this request for safety reasons. '
+               'Try rephrasing it.*')
+
+
+def stream_openai(api_key, messages):
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    stream = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        stream=True,
+        messages=[{'role': 'system', 'content': SYSTEM_PROMPT}]
+        + [{'role': m['role'], 'content': m['content']} for m in messages],
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
+def stream_demo(messages):
+    """Offline assistant used when no API key is configured."""
+    import time
+
+    prompt = messages[-1]['content'].strip()
+    lower = prompt.lower()
+    if any(w in lower for w in ('hello', 'hi', 'hey', 'yo')):
+        reply = ("Hey! I'm the built-in demo assistant. Add an Anthropic or "
+                 "OpenAI API key in the sidebar to chat with Claude or GPT "
+                 "for real. Meanwhile, ask me anything and I'll do my best!")
+    elif '?' in prompt:
+        reply = (f'Great question! In demo mode I can\'t reason deeply about '
+                 f'"{prompt[:80]}" — but once you add an API key in the '
+                 f'sidebar, Claude ({CLAUDE_MODEL}) or GPT ({OPENAI_MODEL}) '
+                 f'will give you a proper answer with full streaming.')
+    else:
+        reply = (f'You said: "{prompt[:120]}". I\'m the demo assistant — '
+                 'plug in an API key in the sidebar to unlock the real '
+                 'Claude and GPT models. Everything else (conversations, '
+                 'history, the video feed) already works!')
+    for word in reply.split(' '):
+        yield word + ' '
+        time.sleep(0.02)
+
+
+# ---------------------------------------------------------------------------
+# For You feed (self-contained HTML/JS component)
+# ---------------------------------------------------------------------------
+
+FEED_VIDEOS = [
+    {
+        'src': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
+        'user': '@chromecast.fun', 'caption': 'When the weekend finally hits 🎉 #fun #vibes',
+        'song': '♫ original sound — chromecast.fun', 'likes': 4231, 'avatar': '🎉',
+    },
+    {
+        'src': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+        'user': '@bunny.films', 'caption': 'Big Buck Bunny never misses 🐰 #animation #classic',
+        'song': '♫ Big Buck Bunny theme', 'likes': 12876, 'avatar': '🐰',
+    },
+    {
+        'src': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
+        'user': '@escape.artist', 'caption': 'POV: you booked the trip ✈️ #travel #escape',
+        'song': '♫ wanderlust beats', 'likes': 8054, 'avatar': '✈️',
+    },
+    {
+        'src': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+        'user': '@dream.scenes', 'caption': 'Elephants Dream hits different at 2am 🌌 #scifi',
+        'song': '♫ dreamcore mix', 'likes': 6390, 'avatar': '🌌',
+    },
+    {
+        'src': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+        'user': '@blaze.tv', 'caption': 'Movie night just got an upgrade 🔥 #bingewatch',
+        'song': '♫ trending sound — blaze.tv', 'likes': 9911, 'avatar': '🔥',
+    },
+    {
+        'src': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
+        'user': '@joyride.daily', 'caption': 'Sunday drives >>> everything 🚗 #joyride',
+        'song': '♫ open road radio', 'likes': 5478, 'avatar': '🚗',
+    },
+    {
+        'src': 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4',
+        'user': '@meltdown.moments', 'caption': 'Relatable level: 100 😅 #mood',
+        'song': '♫ original sound — meltdown.moments', 'likes': 7245, 'avatar': '😅',
+    },
+]
+
+
+def feed_html():
+    videos_json = json.dumps(FEED_VIDEOS)
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; }
+  body { background:#0b0b0f; display:flex; justify-content:center; align-items:flex-start; }
+  .phone { position:relative; width:390px; height:700px; background:#000; border-radius:36px;
+           overflow:hidden; border:6px solid #1c1c22; box-shadow:0 18px 60px rgba(0,0,0,.65); }
+  .topbar { position:absolute; top:0; left:0; right:0; z-index:30; display:flex; gap:18px;
+            justify-content:center; padding:14px 0 8px; color:#fff; font-size:15px; font-weight:600;
+            background:linear-gradient(#000a,#0000); pointer-events:none; }
+  .topbar .dim { color:#ffffff88; }
+  .topbar .active { border-bottom:2px solid #fff; padding-bottom:2px; }
+  .feed { height:100%; overflow-y:scroll; scroll-snap-type:y mandatory; scrollbar-width:none; }
+  .feed::-webkit-scrollbar { display:none; }
+  .slide { position:relative; height:700px; scroll-snap-align:start; scroll-snap-stop:always; background:#000; }
+  .slide video { width:100%; height:100%; object-fit:cover; }
+  .meta { position:absolute; left:12px; right:76px; bottom:22px; color:#fff; z-index:10;
+          text-shadow:0 1px 3px rgba(0,0,0,.8); }
+  .meta .user { font-weight:700; font-size:16px; margin-bottom:6px; }
+  .meta .cap { font-size:14px; line-height:1.35; margin-bottom:8px; }
+  .meta .song { font-size:12.5px; opacity:.9; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rail { position:absolute; right:10px; bottom:30px; display:flex; flex-direction:column;
+          align-items:center; gap:16px; z-index:10; }
+  .avatar { position:relative; width:46px; height:46px; border-radius:50%; background:#26262e;
+            border:2px solid #fff; display:flex; align-items:center; justify-content:center;
+            font-size:22px; cursor:pointer; }
+  .avatar .plus { position:absolute; bottom:-8px; left:50%; transform:translateX(-50%);
+                  width:18px; height:18px; border-radius:50%; background:#fe2c55; color:#fff;
+                  font-size:13px; line-height:17px; text-align:center; font-weight:700; }
+  .avatar .plus.followed { background:#2bd97c; }
+  .act { display:flex; flex-direction:column; align-items:center; color:#fff; cursor:pointer;
+         user-select:none; }
+  .act .ico { font-size:30px; filter:drop-shadow(0 1px 3px rgba(0,0,0,.7)); transition:transform .12s; }
+  .act:active .ico { transform:scale(1.25); }
+  .act .n { font-size:12px; font-weight:600; margin-top:2px; text-shadow:0 1px 2px #000; }
+  .liked .ico { color:#fe2c55; }
+  .heartburst { position:absolute; z-index:20; font-size:84px; pointer-events:none;
+                animation:burst .7s ease-out forwards; }
+  @keyframes burst { 0%{transform:scale(.4);opacity:0} 25%{transform:scale(1.15);opacity:1}
+                     100%{transform:scale(1) translateY(-46px);opacity:0} }
+  .paused-badge { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+                  font-size:64px; color:#ffffffcc; z-index:15; pointer-events:none;
+                  text-shadow:0 2px 10px #000; }
+  .drawer { position:absolute; left:0; right:0; bottom:-62%; height:62%; background:#16161c;
+            border-radius:16px 16px 0 0; z-index:40; transition:bottom .25s ease; color:#eee;
+            display:flex; flex-direction:column; }
+  .drawer.open { bottom:0; }
+  .drawer .head { padding:12px; text-align:center; font-size:14px; font-weight:600;
+                  border-bottom:1px solid #26262e; position:relative; }
+  .drawer .close { position:absolute; right:14px; top:10px; cursor:pointer; color:#aaa; font-size:16px; }
+  .drawer .list { flex:1; overflow-y:auto; padding:10px 14px; font-size:14px; }
+  .cmt { margin-bottom:12px; }
+  .cmt .who { font-weight:700; font-size:12.5px; color:#bbb; }
+  .drawer .compose { display:flex; gap:8px; padding:10px; border-top:1px solid #26262e; }
+  .drawer input { flex:1; background:#26262e; border:none; border-radius:18px; color:#fff;
+                  padding:9px 14px; font-size:14px; outline:none; }
+  .drawer button { background:#fe2c55; color:#fff; border:none; border-radius:18px;
+                   padding:0 16px; font-weight:700; cursor:pointer; }
+  .uploadbar { position:absolute; top:10px; right:12px; z-index:35; }
+  .uploadbar label { background:#ffffff22; color:#fff; font-size:12px; padding:6px 10px;
+                     border-radius:14px; cursor:pointer; backdrop-filter:blur(4px); }
+  .toast { position:absolute; bottom:90px; left:50%; transform:translateX(-50%);
+           background:#000c; color:#fff; padding:8px 16px; border-radius:18px; font-size:13px;
+           z-index:50; opacity:0; transition:opacity .25s; pointer-events:none; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="topbar"><span class="dim">Following</span><span class="active">For You</span></div>
+  <div class="uploadbar"><label for="upl">＋ Upload</label>
+    <input id="upl" type="file" accept="video/*" style="display:none"></div>
+  <div class="feed" id="feed"></div>
+  <div class="drawer" id="drawer">
+    <div class="head">Comments <span class="close" onclick="closeDrawer()">✕</span></div>
+    <div class="list" id="cmtlist"></div>
+    <div class="compose">
+      <input id="cmtinput" placeholder="Add a comment..."
+             onkeydown="if(event.key==='Enter')postComment()">
+      <button onclick="postComment()">Post</button>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+</div>
+<script>
+const VIDEOS = __VIDEOS__;
+const feed = document.getElementById('feed');
+const store = {
+  get likes()    { return JSON.parse(localStorage.getItem('pp_likes')    || '{}'); },
+  get follows()  { return JSON.parse(localStorage.getItem('pp_follows')  || '{}'); },
+  get comments() { return JSON.parse(localStorage.getItem('pp_comments') || '{}'); },
+  set(key, val)  { localStorage.setItem('pp_' + key, JSON.stringify(val)); },
+};
+let drawerIdx = null;
+
+function fmt(n) { return n >= 1000 ? (n/1000).toFixed(1).replace(/\\.0$/,'') + 'K' : n; }
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 1500);
+}
+
+function buildSlide(v, i) {
+  const el = document.createElement('div');
+  el.className = 'slide'; el.dataset.idx = i;
+  const liked = !!store.likes[i];
+  const followed = !!store.follows[v.user];
+  const nCmts = (store.comments[i] || []).length;
+  el.innerHTML = `
+    <video src="${v.src}" loop muted playsinline preload="metadata"></video>
+    <div class="meta">
+      <div class="user">${v.user}</div>
+      <div class="cap">${v.caption}</div>
+      <div class="song">${v.song}</div>
+    </div>
+    <div class="rail">
+      <div class="avatar" onclick="toggleFollow(${i})">${v.avatar}
+        <div class="plus ${followed ? 'followed' : ''}" id="plus${i}">${followed ? '✓' : '+'}</div></div>
+      <div class="act ${liked ? 'liked' : ''}" id="like${i}" onclick="toggleLike(${i})">
+        <div class="ico">${liked ? '❤️' : '🤍'}</div><div class="n" id="likeN${i}">${fmt(v.likes + (liked ? 1 : 0))}</div></div>
+      <div class="act" onclick="openDrawer(${i})">
+        <div class="ico">💬</div><div class="n" id="cmtN${i}">${nCmts || 'Add'}</div></div>
+      <div class="act" onclick="share(${i})"><div class="ico">↗️</div><div class="n">Share</div></div>
+    </div>`;
+  const vid = el.querySelector('video');
+  let lastTap = 0;
+  vid.addEventListener('click', () => {
+    const now = Date.now();
+    if (now - lastTap < 300) { doubleTapLike(el, i); }
+    else { setTimeout(() => { if (Date.now() - lastTap >= 300) togglePlay(el, vid); }, 310); }
+    lastTap = now;
+  });
+  return el;
+}
+
+function togglePlay(slide, vid) {
+  const badge = slide.querySelector('.paused-badge');
+  if (vid.paused) { vid.play(); if (badge) badge.remove(); }
+  else { vid.pause(); const b = document.createElement('div');
+         b.className = 'paused-badge'; b.textContent = '▶'; slide.appendChild(b); }
+}
+
+function doubleTapLike(slide, i) {
+  if (!store.likes[i]) toggleLike(i);
+  const h = document.createElement('div');
+  h.className = 'heartburst'; h.textContent = '❤️';
+  h.style.left = '150px'; h.style.top = '280px';
+  slide.appendChild(h); setTimeout(() => h.remove(), 700);
+}
+
+function toggleLike(i) {
+  const likes = store.likes; likes[i] = !likes[i]; store.set('likes', likes);
+  const btn = document.getElementById('like' + i);
+  btn.classList.toggle('liked', likes[i]);
+  btn.querySelector('.ico').textContent = likes[i] ? '❤️' : '🤍';
+  const base = VIDEOS[i].likes || 0;
+  document.getElementById('likeN' + i).textContent = fmt(base + (likes[i] ? 1 : 0));
+}
+
+function toggleFollow(i) {
+  const user = VIDEOS[i].user, follows = store.follows;
+  follows[user] = !follows[user]; store.set('follows', follows);
+  document.querySelectorAll('.slide').forEach(s => {
+    const j = +s.dataset.idx;
+    if (VIDEOS[j] && VIDEOS[j].user === user) {
+      const p = document.getElementById('plus' + j);
+      p.textContent = follows[user] ? '✓' : '+';
+      p.classList.toggle('followed', follows[user]);
+    }
+  });
+  toast(follows[user] ? 'Following ' + user : 'Unfollowed ' + user);
+}
+
+function openDrawer(i) {
+  drawerIdx = i; renderComments();
+  document.getElementById('drawer').classList.add('open');
+}
+function closeDrawer() { document.getElementById('drawer').classList.remove('open'); }
+function renderComments() {
+  const list = document.getElementById('cmtlist');
+  const cmts = store.comments[drawerIdx] || [];
+  list.innerHTML = cmts.length
+    ? cmts.map(c => `<div class="cmt"><div class="who">${c.who}</div><div>${c.text
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div></div>`).join('')
+    : '<div style="color:#888;text-align:center;margin-top:30px">No comments yet — say something nice!</div>';
+  list.scrollTop = list.scrollHeight;
+}
+function postComment() {
+  const inp = document.getElementById('cmtinput');
+  const text = inp.value.trim(); if (!text) return;
+  const all = store.comments;
+  (all[drawerIdx] = all[drawerIdx] || []).push({ who: '@you', text });
+  store.set('comments', all); inp.value = '';
+  renderComments();
+  document.getElementById('cmtN' + drawerIdx).textContent = all[drawerIdx].length;
+}
+
+function share(i) {
+  const link = VIDEOS[i].src;
+  if (navigator.clipboard) navigator.clipboard.writeText(link).catch(() => {});
+  toast('Link copied to clipboard');
+}
+
+document.getElementById('upl').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const idx = VIDEOS.length;
+  VIDEOS.push({ src: URL.createObjectURL(f), user: '@you',
+                caption: f.name + ' — uploaded by you 🎬', song: '♫ your sound',
+                likes: 0, avatar: '🫵' });
+  const slide = buildSlide(VIDEOS[idx], idx);
+  feed.insertBefore(slide, feed.firstChild);
+  observer.observe(slide);
+  feed.scrollTo({ top: 0, behavior: 'smooth' });
+  toast('Added to your feed');
+});
+
+// Autoplay only the visible slide.
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(en => {
+    const vid = en.target.querySelector('video');
+    if (en.isIntersecting && en.intersectionRatio > 0.6) {
+      vid.play().catch(() => {});
+      const b = en.target.querySelector('.paused-badge'); if (b) b.remove();
+    } else { vid.pause(); }
+  });
+}, { threshold: [0.6] });
+
+VIDEOS.forEach((v, i) => {
+  const slide = buildSlide(v, i);
+  feed.appendChild(slide);
+  observer.observe(slide);
+});
+</script>
+</body>
+</html>
+""".replace('__VIDEOS__', videos_json)
+
+
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
+
+def page_feed():
+    feed_file = DATA_DIR / 'feed.html'
+    feed_file.write_text(feed_html())
+    left, mid, right = st.columns([1, 2, 1])
+    with mid:
+        if hasattr(st, 'iframe'):
+            st.iframe(feed_file, height=730)
+        else:
+            components.html(feed_html(), height=730, scrolling=False)
+    with right:
+        st.markdown('#### How to use the feed')
+        st.markdown(
+            '- **Scroll** to snap between videos (autoplay)\n'
+            '- **Tap** a video to pause / play\n'
+            '- **Double-tap** to like ❤️\n'
+            '- **💬** opens comments — yours are saved in your browser\n'
+            '- **＋ Upload** adds your own video for this session\n'
+            '- **+ on the avatar** follows the creator'
+        )
+        st.caption('Demo clips are openly licensed sample videos '
+                   '(Blender Foundation / Google sample bucket).')
+
+
+def page_chat():
+    store = load_chats()
+
+    # --- sidebar: assistant + keys + conversation list -------------------
+    with st.sidebar:
+        st.markdown('### 🤖 Assistant')
+        provider = st.radio(
+            'Model', ['Claude', 'GPT'],
+            horizontal=True, label_visibility='collapsed',
+        )
+        with st.expander('🔑 API keys', expanded=False):
+            anthropic_key = st.text_input(
+                'Anthropic API key', type='password',
+                value=get_secret('ANTHROPIC_API_KEY'))
+            openai_key = st.text_input(
+                'OpenAI API key', type='password',
+                value=get_secret('OPENAI_API_KEY'))
+            st.caption('No key? A demo assistant replies instead.')
+
+        st.divider()
+        if st.button('＋ New chat', use_container_width=True):
+            st.session_state.chat_id = new_chat(store)
             st.rerun()
 
-    if not store['my_photos']:
-        st.info('Your gallery is empty — upload your first photos above.')
+        for cid in list(store['order']):
+            chat = store['chats'][cid]
+            c1, c2 = st.columns([5, 1])
+            label = chat['title'][:34] or 'New chat'
+            if c1.button(label, key=f'open_{cid}', use_container_width=True):
+                st.session_state.chat_id = cid
+                st.rerun()
+            if c2.button('🗑', key=f'del_{cid}'):
+                store['order'].remove(cid)
+                del store['chats'][cid]
+                save_chats(store)
+                if st.session_state.get('chat_id') == cid:
+                    st.session_state.pop('chat_id', None)
+                st.rerun()
+
+    # --- active conversation --------------------------------------------
+    if 'chat_id' not in st.session_state or st.session_state.chat_id not in store['chats']:
+        if store['order']:
+            st.session_state.chat_id = store['order'][0]
+        else:
+            st.session_state.chat_id = new_chat(store)
+    chat = store['chats'][st.session_state.chat_id]
+
+    st.markdown(f"### 💬 {chat['title']}")
+    for msg in chat['messages']:
+        avatar = '🧑' if msg['role'] == 'user' else ('🟠' if msg.get('by') == 'Claude' else '🟢')
+        with st.chat_message(msg['role'], avatar=avatar):
+            st.markdown(msg['content'])
+
+    prompt = st.chat_input(f'Message {provider}...')
+    if not prompt:
         return
 
-    # --- Filters ------------------------------------------------------------
-    view = st.radio(
-        'Show', ['All', '❤️ Liked', '🔖 Marked', '📌 Kept', '🌍 Published'],
-        horizontal=True, label_visibility='collapsed',
-    )
-    photos = store['my_photos']
-    if view == '❤️ Liked':
-        photos = [p for p in photos if p['liked']]
-    elif view == '🔖 Marked':
-        photos = [p for p in photos if p['marked']]
-    elif view == '📌 Kept':
-        photos = [p for p in photos if p['kept']]
-    elif view == '🌍 Published':
-        photos = [p for p in photos if p['published']]
+    chat['messages'].append({'role': 'user', 'content': prompt})
+    if chat['title'] == 'New chat':
+        chat['title'] = prompt[:40]
+    save_chats(store)
+    with st.chat_message('user', avatar='🧑'):
+        st.markdown(prompt)
 
-    st.caption(f'{len(photos)} photo(s)')
-    if not photos:
-        st.info('No photos match this filter.')
-        return
+    key = anthropic_key if provider == 'Claude' else openai_key
+    avatar = '🟠' if provider == 'Claude' else '🟢'
+    with st.chat_message('assistant', avatar=avatar):
+        try:
+            if not key:
+                reply = st.write_stream(stream_demo(chat['messages']))
+                by = 'Demo'
+            elif provider == 'Claude':
+                reply = st.write_stream(stream_claude(key, chat['messages']))
+                by = 'Claude'
+            else:
+                reply = st.write_stream(stream_openai(key, chat['messages']))
+                by = 'GPT'
+        except Exception as exc:
+            reply = f'⚠️ {provider} request failed: `{exc}`'
+            by = provider
+            st.markdown(reply)
 
-    # --- Grid ---------------------------------------------------------------
-    cols = st.columns(3)
-    for i, photo in enumerate(photos):
-        with cols[i % 3].container(border=True):
-            show_photo(photo)
-
-            badges = []
-            if photo['liked']:
-                badges.append('❤️ Liked')
-            if photo['marked']:
-                badges.append('🔖 Marked')
-            if photo['kept']:
-                badges.append('📌 Kept')
-            if photo['published']:
-                badges.append('🌍 Published')
-            st.markdown(f"**{photo['title']}**" + ('  \n' + ' · '.join(badges) if badges else ''))
-
-            action_cols = st.columns(4)
-            action_cols[0].button(
-                '❤️' if photo['liked'] else '🤍',
-                key=f"mylike_{photo['id']}", help='Like',
-                on_click=toggle_my, args=(photo, 'liked'),
-            )
-            action_cols[1].button(
-                '🔖' if photo['marked'] else '🏷️',
-                key=f"mymark_{photo['id']}", help='Mark',
-                on_click=toggle_my, args=(photo, 'marked'),
-            )
-            action_cols[2].button(
-                '📌' if photo['kept'] else '📍',
-                key=f"mykeep_{photo['id']}",
-                help='Keep — protects the photo from removal',
-                on_click=toggle_my, args=(photo, 'kept'),
-            )
-            action_cols[3].button(
-                '🗑️', key=f"myremove_{photo['id']}",
-                help='Photo is kept — un-keep it first to remove'
-                     if photo['kept'] else 'Remove from gallery',
-                disabled=photo['kept'],
-                on_click=remove_my, args=(photo,),
-            )
-
-            st.button(
-                '🚫 Unpublish' if photo['published'] else '🌍 Publish online',
-                key=f"mypublish_{photo['id']}",
-                type='secondary' if photo['published'] else 'primary',
-                on_click=toggle_publish, args=(photo,),
-                use_container_width=True,
-            )
+    chat['messages'].append({'role': 'assistant', 'content': str(reply), 'by': by})
+    save_chats(store)
 
 
-def people():
-    st.title('👥 People')
-    st.caption('Photographers publishing on PhotoShare.')
-
-    for username, user in store['users'].items():
-        with st.container(border=True):
-            info_col, btn_col = st.columns([3, 1])
-            published = [p for p in store['feed_photos'] if p['author'] == username]
-            total_likes = sum(p['likes'] for p in published)
-            with info_col:
-                st.subheader(f"{user['name']} · @{username}")
-                st.write(user['bio'])
-                st.caption(f'{len(published)} photos · {total_likes} likes')
-            with btn_col:
-                following = username in store['following']
-                st.button(
-                    '✓ Following' if following else '➕ Follow',
-                    key=f'people_follow_{username}',
-                    type='secondary' if following else 'primary',
-                    on_click=toggle_follow, args=(username,),
-                )
-
-
-# -----------------------------------------------------------------------------
-# Navigation
+# ---------------------------------------------------------------------------
+# App shell
+# ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.title('📸 PhotoShare')
-    page = st.radio('Go to', ['Community Feed', 'My Gallery', 'People'])
+    st.markdown('## ⚡ PulsePlay')
+    page = st.radio('Go to', ['🎬 For You', '💬 AI Chat'], label_visibility='collapsed')
     st.divider()
-    st.caption(f"📷 {len(store['my_photos'])} photos in your gallery")
-    st.caption(f"🌍 {sum(1 for p in store['my_photos'] if p['published'])} published by you")
-    st.caption(f"➕ Following {len(store['following'])} people")
 
-if page == 'Community Feed':
-    community_feed()
-elif page == 'My Gallery':
-    my_gallery()
+if page == '🎬 For You':
+    page_feed()
 else:
-    people()
+    page_chat()
