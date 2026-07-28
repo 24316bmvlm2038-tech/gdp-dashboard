@@ -421,6 +421,54 @@ def comments_block(photo, key_prefix):
                   on_click=add_comment, args=(photo, comment_key))
 
 
+@st.dialog('Preview', width='large')
+def photo_preview(photo, mine=False):
+    """Lightbox-style modal preview of a photo."""
+    show_photo(photo)
+    if mine:
+        st.markdown(f"<span class='handle' style='font-size:1.1rem'>"
+                    f"{photo['title']}</span>", unsafe_allow_html=True)
+        status = []
+        if photo['liked']:
+            status.append('❤️ Liked')
+        if photo['marked']:
+            status.append('🔖 Marked')
+        if photo['kept']:
+            status.append('📌 Kept')
+        status.append('🌍 Published' if photo['published'] else '🔒 Private')
+        st.caption(' · '.join(status)
+                   + f" · added {rel_time(photo['uploaded_at'])} ago")
+    else:
+        st.markdown(f"{avatar_img(photo['author'], 34)}  <span class='handle'>"
+                    f"{handle_of(photo)}</span>  {photo['caption']}",
+                    unsafe_allow_html=True)
+        st.caption(f"{fmt_count(photo['likes'])} likes · "
+                   f"{fmt_count(photo.get('views', 0))} views · "
+                   f"{rel_time(photo['posted_at'])}")
+        comments_block(photo, 'dlg')
+
+
+def suggestions_row(context_key):
+    """Instagram-style 'Suggested for you' follow cards."""
+    candidates = [u for u in store['users'] if u not in store['following']]
+    if not candidates:
+        return
+    st.markdown("<span class='handle'>Suggested for you</span>",
+                unsafe_allow_html=True)
+    cols = st.columns(min(4, len(candidates)))
+    for i, username in enumerate(candidates[:4]):
+        with cols[i]:
+            st.markdown(
+                f"<div style='text-align:center'>"
+                f"<div class='story-ring' style='width:56px;height:56px;"
+                f"margin:0 auto'>{avatar_img(username, 56)}</div>"
+                f"<div class='story-name'>{username}</div></div>",
+                unsafe_allow_html=True)
+            st.button('Follow', key=f'sugg_{context_key}_{username}',
+                      type='primary', use_container_width=True,
+                      on_click=toggle_follow, args=(username,))
+
+
 # -----------------------------------------------------------------------------
 # Pages
 
@@ -442,13 +490,15 @@ def ig_post(photo):
 
         liked = photo['my_vote'] == 'like'
         disliked = photo['my_vote'] == 'dislike'
-        b1, b2, _sp = st.columns([1, 1, 4])
+        b1, b2, b3, _sp = st.columns([1, 1, 1, 3])
         b1.button('❤️' if liked else '🤍',
                   key=f"feed_like_{photo['id']}", help='Like',
                   on_click=vote_feed, args=(photo, 'like'))
         b2.button('👎' if disliked else '💔',
                   key=f"feed_dislike_{photo['id']}", help='Dislike',
                   on_click=vote_feed, args=(photo, 'dislike'))
+        if b3.button('🔍', key=f"feed_preview_{photo['id']}", help='Preview'):
+            photo_preview(photo)
 
         st.markdown(f"<div class='likes-line'>{fmt_count(photo['likes'])} likes"
                     + (f" · {photo['dislikes']} dislikes" if photo['dislikes'] else '')
@@ -521,11 +571,16 @@ def page_feed():
         photos = [p for p in store['feed_photos']
                   if p['author'] in store['following'] or p['author'] == ME]
         if not photos:
-            st.info('Follow some people (tap ➕ in For You, or visit People) '
-                    'and their photos will show up here.')
+            st.info('Follow some people and their photos will show up here.')
+            with st.container(border=True):
+                suggestions_row('empty')
             return
-        for photo in photos:
+        for i, photo in enumerate(photos):
             ig_post(photo)
+            # Weave a suggestions card into the feed, Instagram-style.
+            if i == 0:
+                with st.container(border=True):
+                    suggestions_row('feed')
 
 
 def page_gallery():
@@ -550,6 +605,11 @@ def page_gallery():
             accept_multiple_files=True, key=uploader_key,
         )
         caption = st.text_input('Caption (optional, applies to this upload)')
+        if files:
+            st.caption('Preview')
+            pcols = st.columns(min(4, len(files)))
+            for i, f in enumerate(files):
+                pcols[i % len(pcols)].image(f, use_container_width=True)
         if st.button('Add to gallery', type='primary', disabled=not files):
             add_my_photos(files, caption)
             # Change the uploader key so the same files aren't re-added on rerun.
@@ -601,7 +661,7 @@ def page_gallery():
             st.markdown(f"**{photo['title']}**"
                         + ('  \n' + ' '.join(badges) if badges else ''))
 
-            action_cols = st.columns(4)
+            action_cols = st.columns(5)
             action_cols[0].button(
                 '❤️' if photo['liked'] else '🤍',
                 key=f"mylike_{photo['id']}", help='Like',
@@ -625,6 +685,9 @@ def page_gallery():
                 disabled=photo['kept'],
                 on_click=remove_my, args=(photo,),
             )
+            if action_cols[4].button('🔍', key=f"mypreview_{photo['id']}",
+                                     help='Preview full size'):
+                photo_preview(photo, mine=True)
 
             st.button(
                 'Unpublish' if photo['published'] else 'Publish',
