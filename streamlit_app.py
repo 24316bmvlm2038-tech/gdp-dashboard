@@ -507,6 +507,57 @@ FEED_TEMPLATE = r"""<!DOCTYPE html>
            font-size:13px; z-index:55; opacity:0; transition:opacity .25s;
            pointer-events:none; white-space:nowrap; }
   .toast.show { opacity:1; }
+
+  /* ---- Discover / Inbox / Profile sub-views ---- */
+  .hidden { display:none !important; }
+  .subview { position:absolute; inset:0; background:#0c0c11; z-index:40;
+             overflow-y:auto; padding:46px 14px 76px; color:#fff;
+             scrollbar-width:none; }
+  .subview::-webkit-scrollbar { display:none; }
+  .sechead { font-size:18px; font-weight:800; margin:4px 0 12px; }
+  .dsearch { display:flex; margin-bottom:12px; }
+  .dsearch input { flex:1; background:#1e1e26; border:1px solid #ffffff10;
+                   border-radius:10px; color:#fff; padding:11px 14px;
+                   font-size:14px; outline:none; }
+  .dsearch input:focus { border-color:#fe2c5588; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  .chip { background:#1e1e26; border:1px solid #ffffff14; color:#ddd;
+          font-size:12.5px; padding:6px 12px; border-radius:16px; cursor:pointer; }
+  .chip.on { background:#fe2c5522; border-color:#fe2c55; color:#fff; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .tile { position:relative; border-radius:12px; overflow:hidden; background:#17171d;
+          aspect-ratio:9/14; cursor:pointer; }
+  .tile video { width:100%; height:100%; object-fit:cover; }
+  .tile .tmeta { position:absolute; left:8px; right:8px; bottom:6px; font-size:11.5px;
+                 text-shadow:0 1px 2px #000; display:flex;
+                 justify-content:space-between; font-weight:600; }
+  .inrow { display:flex; align-items:center; gap:12px; padding:11px 4px;
+           border-bottom:1px solid #ffffff0c; font-size:13.5px; }
+  .inrow .pfp { width:44px; height:44px; border-radius:50%; background:#1e1e26;
+                flex:none; display:flex; align-items:center; justify-content:center;
+                font-size:20px; }
+  .inrow .when { color:#888; font-size:11.5px; margin-top:2px; }
+  .inrow .what { color:#ddd; }
+  .inrow .dot { width:8px; height:8px; border-radius:50%; background:#fe2c55;
+                margin-left:auto; flex:none; }
+  .phead { display:flex; flex-direction:column; align-items:center; gap:8px;
+           padding:8px 0 4px; }
+  .phead .big { width:84px; height:84px; border-radius:50%;
+                background:linear-gradient(135deg,#25f4ee,#fe2c55); padding:3px; }
+  .phead .big .inner { width:100%; height:100%; border-radius:50%; background:#1e1e26;
+                display:flex; align-items:center; justify-content:center;
+                font-size:40px; border:3px solid #000; }
+  .phead .handle { font-weight:800; font-size:17px; }
+  .pstats { display:flex; gap:26px; margin:6px 0 12px; }
+  .pstat { text-align:center; }
+  .pstat b { display:block; font-size:16px; }
+  .pstat span { color:#999; font-size:12px; }
+  .ptabs { display:flex; border-bottom:1px solid #ffffff14; margin-bottom:12px; }
+  .ptab { flex:1; text-align:center; padding:9px 0; color:#999; font-weight:700;
+          font-size:13.5px; cursor:pointer; border-bottom:2px solid transparent; }
+  .ptab.on { color:#fff; border-color:#fff; }
+  .empty { color:#888; text-align:center; margin-top:40px; font-size:13.5px;
+           grid-column:1/3; }
 </style>
 </head>
 <body>
@@ -518,13 +569,28 @@ FEED_TEMPLATE = r"""<!DOCTYPE html>
   <div class="sound" id="soundbtn" title="Toggle sound"></div>
   <div class="feed" id="feed"></div>
 
+  <div class="subview hidden" id="view-discover">
+    <div class="sechead">Discover</div>
+    <div class="dsearch"><input id="dsearch"
+         placeholder="Search videos, creators, sounds"></div>
+    <div class="chips" id="chips"></div>
+    <div class="grid" id="dgrid"></div>
+  </div>
+  <div class="subview hidden" id="view-inbox">
+    <div class="sechead">Inbox</div>
+    <div id="inlist"></div>
+  </div>
+  <div class="subview hidden" id="view-me">
+    <div id="profile"></div>
+  </div>
+
   <div class="navbar">
-    <div class="nav on"><svg viewBox="0 0 24 24"><path d="M12 3l9 8h-3v9h-5v-6h-2v6H6v-9H3z"/></svg>Home</div>
-    <div class="nav" onclick="toast('Discover — coming soon')"><svg viewBox="0 0 24 24"><path d="M10 2a8 8 0 105.3 14l4.4 4.4 1.4-1.4-4.4-4.4A8 8 0 0010 2zm0 2a6 6 0 110 12 6 6 0 010-12z"/></svg>Discover</div>
+    <div class="nav on" id="nav-home" onclick="switchView('home')"><svg viewBox="0 0 24 24"><path d="M12 3l9 8h-3v9h-5v-6h-2v6H6v-9H3z"/></svg>Home</div>
+    <div class="nav" id="nav-discover" onclick="switchView('discover')"><svg viewBox="0 0 24 24"><path d="M10 2a8 8 0 105.3 14l4.4 4.4 1.4-1.4-4.4-4.4A8 8 0 0010 2zm0 2a6 6 0 110 12 6 6 0 010-12z"/></svg>Discover</div>
     <div class="navplus" onclick="document.getElementById('upl').click()">
       <svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg></div>
-    <div class="nav" onclick="toast('Inbox — coming soon')"><svg viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 011 1v14a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1zm8 8L5 7v11h14V7l-7 5z"/></svg>Inbox</div>
-    <div class="nav" onclick="toast('Profile — coming soon')"><svg viewBox="0 0 24 24"><path d="M12 12a4.5 4.5 0 100-9 4.5 4.5 0 000 9zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5z"/></svg>Me</div>
+    <div class="nav" id="nav-inbox" onclick="switchView('inbox')"><svg viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 011 1v14a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1zm8 8L5 7v11h14V7l-7 5z"/></svg>Inbox</div>
+    <div class="nav" id="nav-me" onclick="switchView('me')"><svg viewBox="0 0 24 24"><path d="M12 12a4.5 4.5 0 100-9 4.5 4.5 0 000 9zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5z"/></svg>Me</div>
   </div>
   <input id="upl" type="file" accept="video/*" style="display:none">
 
@@ -765,9 +831,144 @@ document.getElementById('upl').addEventListener('change', e => {
   const slide = buildSlide(VIDEOS[idx], idx);
   feed.insertBefore(slide, feed.firstChild);
   observer.observe(slide);
+  switchView('home');
   feed.scrollTo({ top: 0, behavior: 'smooth' });
   toast('Added to your feed 🎬');
 });
+
+// ---- Discover / Inbox / Profile views ----
+let curView = 'home';
+let activeChip = null;
+let ptab = 'liked';
+
+function pauseAll() {
+  document.querySelectorAll('.slide video').forEach(v => {
+    v.pause(); clearTimeout(v._wd);
+  });
+}
+function playVisible() {
+  const idx = Math.round(feed.scrollTop / 750);
+  const s = feed.children[idx];
+  if (s) { const v = s.querySelector('video');
+           if (v) { v.muted = muted; v.play().catch(() => {}); } }
+}
+
+function switchView(name) {
+  curView = name;
+  ['discover', 'inbox', 'me'].forEach(v =>
+    document.getElementById('view-' + v).classList.toggle('hidden', v !== name));
+  ['home', 'discover', 'inbox', 'me'].forEach(v => {
+    const n = document.getElementById('nav-' + v);
+    if (n) n.classList.toggle('on', v === name);
+  });
+  const onHome = name === 'home';
+  document.querySelector('.topbar').style.display = onHome ? 'flex' : 'none';
+  soundBtn.style.display = onHome ? 'flex' : 'none';
+  if (onHome) playVisible(); else pauseAll();
+  if (name === 'discover') renderDiscover();
+  if (name === 'inbox') renderInbox();
+  if (name === 'me') renderProfile();
+}
+
+function makeTile(i) {
+  const v = VIDEOS[i];
+  const t = document.createElement('div');
+  t.className = 'tile';
+  t.innerHTML = `<video src="${v.src}" muted preload="metadata" playsinline loop></video>
+    <div class="tmeta"><span>${esc(v.user)}</span><span>❤ ${fmt(v.likes || 0)}</span></div>`;
+  const vid = t.querySelector('video');
+  const toFbk = () => { if (!vid.dataset.fbk && FALLBACKS.length) {
+    vid.dataset.fbk = '1'; vid.src = FALLBACKS[i % FALLBACKS.length]; } };
+  vid.addEventListener('error', toFbk);
+  setTimeout(() => { if (vid.readyState < 1) toFbk(); }, 5000);
+  t.onmouseenter = () => vid.play().catch(() => {});
+  t.onmouseleave = () => vid.pause();
+  t.onclick = () => {
+    switchView('home');
+    const slide = [...feed.children].find(s => +s.dataset.idx === i);
+    if (slide) { slide.scrollIntoView(); playVisible(); }
+  };
+  return t;
+}
+
+function renderDiscover() {
+  const chipsEl = document.getElementById('chips');
+  if (!chipsEl.childElementCount) {
+    const tags = [...new Set(VIDEOS.flatMap(v => v.caption.match(/#\w+/g) || []))]
+      .slice(0, 8);
+    chipsEl.innerHTML = tags.map(t => `<span class="chip">${esc(t)}</span>`).join('');
+    chipsEl.querySelectorAll('.chip').forEach(c => c.onclick = () => {
+      activeChip = activeChip === c.textContent ? null : c.textContent;
+      chipsEl.querySelectorAll('.chip').forEach(x =>
+        x.classList.toggle('on', x.textContent === activeChip));
+      renderGrid();
+    });
+    document.getElementById('dsearch').addEventListener('input', renderGrid);
+  }
+  renderGrid();
+}
+function renderGrid() {
+  const q = (document.getElementById('dsearch').value || '').toLowerCase();
+  const grid = document.getElementById('dgrid');
+  grid.innerHTML = '';
+  VIDEOS.forEach((v, i) => {
+    const hay = (v.user + ' ' + v.caption + ' ' + v.song).toLowerCase();
+    if (q && !hay.includes(q)) return;
+    if (activeChip && !v.caption.includes(activeChip)) return;
+    grid.appendChild(makeTile(i));
+  });
+  if (!grid.childElementCount)
+    grid.innerHTML = '<div class="empty">No results 😢 try another search</div>';
+}
+
+function renderInbox() {
+  const rows = [
+    ['🎉', '@weekend.vibes', 'liked your comment: "🔥🔥🔥"', '2m', true],
+    ['🐰', '@bunny.films', 'started following you', '1h', true],
+    ['🐉', '@sintel.official', 'your comment is blowing up — 24 likes', '3h', false],
+    ['⚡', 'PulsePlay', 'Welcome! Double-tap any video to like it ❤️', '1d', false],
+    ['🤖', '@scifi.daily', 'posted a new video you might like', '2d', false],
+    ['✈️', '@escape.artist', 'mentioned you in a comment', '3d', false],
+  ];
+  document.getElementById('inlist').innerHTML = rows.map(
+    ([a, who, what, when, unread]) => `
+    <div class="inrow"><div class="pfp">${a}</div>
+      <div><b>${esc(who)}</b> <span class="what">${esc(what)}</span>
+        <div class="when">${when} ago</div></div>
+      ${unread ? '<div class="dot"></div>' : ''}</div>`).join('');
+}
+
+function renderProfile() {
+  const likes = store.likes, saves = store.saves, follows = store.follows;
+  const liked = Object.keys(likes).filter(k => likes[k]).map(Number);
+  const saved = Object.keys(saves).filter(k => saves[k]).map(Number);
+  const nFollow = Object.values(follows).filter(Boolean).length;
+  const mine = VIDEOS.map((v, i) => i).filter(i => VIDEOS[i].user === '@you');
+  const el = document.getElementById('profile');
+  el.innerHTML = `
+    <div class="phead"><div class="big"><div class="inner">🫵</div></div>
+      <div class="handle">@you</div>
+      <div class="pstats">
+        <div class="pstat"><b>${nFollow}</b><span>Following</span></div>
+        <div class="pstat"><b>${liked.length}</b><span>Liked</span></div>
+        <div class="pstat"><b>${saved.length}</b><span>Favorites</span></div>
+        <div class="pstat"><b>${mine.length}</b><span>Videos</span></div>
+      </div></div>
+    <div class="ptabs">
+      <div class="ptab ${ptab === 'liked' ? 'on' : ''}" data-t="liked">❤️ Liked</div>
+      <div class="ptab ${ptab === 'saved' ? 'on' : ''}" data-t="saved">🔖 Favorites</div>
+      <div class="ptab ${ptab === 'mine' ? 'on' : ''}" data-t="mine">🎬 Mine</div>
+    </div>
+    <div class="grid" id="pgrid"></div>`;
+  el.querySelectorAll('.ptab').forEach(t => t.onclick = () => {
+    ptab = t.dataset.t; renderProfile(); });
+  const idxs = ptab === 'liked' ? liked : ptab === 'saved' ? saved : mine;
+  const grid = el.querySelector('#pgrid');
+  if (!idxs.length)
+    grid.innerHTML = `<div class="empty">Nothing here yet — ${
+      ptab === 'mine' ? 'upload a video with the ＋ button' : 'go explore the feed'}!</div>`;
+  else idxs.forEach(i => { if (VIDEOS[i]) grid.appendChild(makeTile(i)); });
+}
 
 // ---- autoplay only the visible slide ----
 const observer = new IntersectionObserver(entries => {
@@ -939,65 +1140,96 @@ def page_chat():
                 st.image(base64.b64decode(img['data']), width=260)
             st.markdown(msg['content'])
 
+    def generate_reply():
+        key = anthropic_key if provider == 'Claude' else openai_key
+        with st.chat_message('assistant',
+                             avatar=AVATARS[provider] if key else AVATAR_DEMO):
+            thinking_slot = None
+            if key and provider == 'Claude' and show_thinking:
+                with st.expander('💭 Thinking…', expanded=False):
+                    thinking_slot = st.empty()
+            try:
+                if not key:
+                    reply = st.write_stream(stream_demo(chat['messages']))
+                    by = 'Demo'
+                elif provider == 'Claude':
+                    reply = st.write_stream(stream_claude(
+                        key, chat['messages'], effort, web_search,
+                        show_thinking, thinking_slot))
+                    by = 'Claude'
+                else:
+                    reply = st.write_stream(stream_openai(key, chat['messages']))
+                    by = 'GPT'
+            except Exception as exc:
+                reply = f'⚠️ {provider} request failed: `{exc}`'
+                by = provider
+                st.markdown(reply)
+        chat['messages'].append({'role': 'assistant', 'content': str(reply), 'by': by})
+        save_chats(store)
+
+    # Suggested starters on an empty conversation
+    if not chat['messages']:
+        st.markdown('#### What should we dig into?')
+        suggestions = [
+            '🌍 What are the biggest AI stories this week?',
+            "🧮 What's 18% of 260?",
+            '✈️ Plan a 3-day food tour of Tokyo',
+            '🐍 Explain Python decorators with a tiny example',
+        ]
+        cols = st.columns(2)
+        for i, sug in enumerate(suggestions):
+            if cols[i % 2].button(sug, key=f'sug{i}', use_container_width=True):
+                chat['messages'].append({'role': 'user', 'content': sug[2:].strip()})
+                chat['title'] = sug[2:].strip()[:40]
+                save_chats(store)
+                st.rerun()
+
+    # Regenerate the last answer
+    if chat['messages'] and chat['messages'][-1]['role'] == 'assistant':
+        if st.button('🔄 Regenerate', key='regen'):
+            chat['messages'].pop()
+            save_chats(store)
+            st.rerun()
+
     submitted = st.chat_input(
         f'Message {provider}…  (you can attach images)',
         accept_file='multiple', file_type=['png', 'jpg', 'jpeg', 'gif', 'webp'],
     )
-    if not submitted:
-        return
+    if submitted:
+        prompt = submitted.text if hasattr(submitted, 'text') else str(submitted)
+        files = getattr(submitted, 'files', []) or []
+        images = []
+        for f in files[:4]:
+            raw = f.read()
+            if len(raw) <= 4_500_000:
+                images.append({
+                    'mime': f.type or 'image/png',
+                    'data': base64.b64encode(raw).decode(),
+                })
+        if not prompt and not images:
+            return
 
-    prompt = submitted.text if hasattr(submitted, 'text') else str(submitted)
-    files = getattr(submitted, 'files', []) or []
-    images = []
-    for f in files[:4]:
-        raw = f.read()
-        if len(raw) <= 4_500_000:
-            images.append({
-                'mime': f.type or 'image/png',
-                'data': base64.b64encode(raw).decode(),
-            })
-    if not prompt and not images:
-        return
+        user_msg = {'role': 'user', 'content': prompt}
+        if images:
+            user_msg['images'] = images
+        chat['messages'].append(user_msg)
+        if chat['title'] == 'New chat':
+            chat['title'] = (prompt or 'Image chat')[:40]
+        save_chats(store)
 
-    user_msg = {'role': 'user', 'content': prompt}
-    if images:
-        user_msg['images'] = images
-    chat['messages'].append(user_msg)
-    if chat['title'] == 'New chat':
-        chat['title'] = (prompt or 'Image chat')[:40]
-    save_chats(store)
+        with st.chat_message('user', avatar=AVATAR_USER):
+            for img in images:
+                st.image(base64.b64decode(img['data']), width=260)
+            if prompt:
+                st.markdown(prompt)
 
-    with st.chat_message('user', avatar=AVATAR_USER):
-        for img in images:
-            st.image(base64.b64decode(img['data']), width=260)
-        if prompt:
-            st.markdown(prompt)
-
-    key = anthropic_key if provider == 'Claude' else openai_key
-    with st.chat_message('assistant', avatar=AVATARS[provider] if key else AVATAR_DEMO):
-        thinking_slot = None
-        if key and provider == 'Claude' and show_thinking:
-            with st.expander('💭 Thinking…', expanded=False):
-                thinking_slot = st.empty()
-        try:
-            if not key:
-                reply = st.write_stream(stream_demo(chat['messages']))
-                by = 'Demo'
-            elif provider == 'Claude':
-                reply = st.write_stream(stream_claude(
-                    key, chat['messages'], effort, web_search,
-                    show_thinking, thinking_slot))
-                by = 'Claude'
-            else:
-                reply = st.write_stream(stream_openai(key, chat['messages']))
-                by = 'GPT'
-        except Exception as exc:
-            reply = f'⚠️ {provider} request failed: `{exc}`'
-            by = provider
-            st.markdown(reply)
-
-    chat['messages'].append({'role': 'assistant', 'content': str(reply), 'by': by})
-    save_chats(store)
+        generate_reply()
+        st.rerun()
+    elif chat['messages'] and chat['messages'][-1]['role'] == 'user':
+        # A suggestion click or a regenerate left a user message awaiting a
+        # reply (it is already rendered by the history loop above).
+        generate_reply()
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
