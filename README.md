@@ -1,34 +1,43 @@
 # :zap: PulsePlay
 
 A short-video feed **and** an AI chat assistant in one [Streamlit](https://streamlit.io) app —
-a TikTok-style "For You" feed plus a ChatGPT-style chat where you can talk to
+a TikTok-style "For You" feed plus a modern AI chat where you can talk to
 **Claude** or **GPT**.
 
 ## 🎬 For You feed
 
-A phone-frame vertical video feed:
+A phone-frame vertical video feed with real MP4 videos:
 
-- **Snap scrolling** between full-screen videos with autoplay (only the visible video plays)
-- **Tap** to pause / play, **double-tap** to like with a heart burst ❤️
-- **💬 Comments drawer** — post comments, saved in your browser (localStorage)
-- **Follow / unfollow** creators from the avatar `+` button
-- **↗️ Share** copies the video link
-- **＋ Upload** your own video into the feed for the current session
+- **Snap scrolling** between full-screen videos — only the visible one autoplays
+- **Sound toggle** (videos start muted so browser autoplay works)
+- **Tap** to pause / play, **double-tap** to like with a heart-burst at your tap point
+- Right-side action rail with SVG icons: like ❤️, comments 💬, favorites 🔖, share ↗
+- **Comments drawer**, follow/unfollow with gradient avatar rings, spinning music
+  disc with a marquee song title, per-video **progress bar**
+- **Bottom nav bar** with an upload button — add your own video to the feed
+- **Loading spinners** while videos buffer, and **automatic offline fallback**:
+  if a remote clip can't load (blocked network, offline demo), the slide swaps
+  to a locally generated animated clip in `assets/` so the feed never dies
+- Likes, favorites, follows and comments persist in your browser (localStorage)
 
-Demo clips are openly licensed sample videos (Blender Foundation shorts via
-Google's public sample bucket).
+Remote clips are openly licensed sample videos (Blender Foundation shorts via
+Google's public sample bucket). Fallback clips are generated in-repo.
 
 ## 💬 AI Chat
 
-A ChatGPT-style chat with a conversation sidebar:
+A polished chat with a conversation sidebar and custom avatars:
 
-- Switch between **Claude** (`claude-opus-5`, Anthropic API) and **GPT**
-  (`gpt-4o`, OpenAI API) — streaming responses for both
-- **Multiple conversations** with history, titles, and delete — persisted to
-  `data/chats.json`
-- **Demo assistant** answers when no API key is set, so the app always works
-- Claude requests opt into Anthropic's server-side refusal fallback, and
-  refusals are surfaced gracefully
+- **Claude** (`claude-opus-5`, Anthropic API) with:
+  - 🌐 **Live web search** (server-side tool, on by default)
+  - 🎚️ **Power slider** — Fast / Balanced / Max reasoning effort
+  - 💭 **Show thinking** — stream Claude's reasoning summary live
+  - 🖼️ **Image understanding** — attach images in the chat input
+  - Server-side refusal fallback, with refusals surfaced gracefully
+- **GPT** (`gpt-4o`, OpenAI API) with streaming and image understanding
+- **Multiple conversations** with history, auto-titles and delete — persisted
+  to `data/chats.json`
+- **Smarter demo assistant** when no key is set: offline math (including
+  "18% of 260"), time/date, coin flips, dice, jokes
 
 ### API keys
 
