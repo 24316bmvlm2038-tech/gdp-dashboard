@@ -132,6 +132,55 @@ def test_save_load_roundtrip(tmp_path):
     assert np.allclose(model.forward(idx)[0], back.forward(idx)[0])
 
 
+def _roomy_model(seed=9):
+    """Same tiny model but with context to spare, so generation never wraps."""
+    return Clode(Config(vocab_size=17, n_ctx=32, n_embd=16, n_head=2, n_layer=2),
+                 seed=seed)
+
+
+def test_decode_step_logits_equal_full_forward():
+    """One cached step must produce the same logits as re-reading everything."""
+    model = _roomy_model()
+    prompt = [3, 1, 4, 1, 5]
+    kv, _ = model._prefill(prompt)
+    stepped = model._decode_step(7, len(prompt), kv)
+    full = model.forward(np.array([prompt + [7]]))[0][0, -1]
+    assert np.abs(stepped - full).max() < 1e-6
+
+
+def test_kv_cache_matches_naive_decoding():
+    """Incremental decoding is an optimisation, not a behaviour change."""
+    model = _roomy_model()
+    prompt = [3, 1, 4, 1, 5]
+    cached = list(model.generate(prompt, max_new_tokens=20, temperature=0.0,
+                                 repetition_penalty=1.1, use_cache=True))
+    naive = list(model.generate(prompt, max_new_tokens=20, temperature=0.0,
+                                repetition_penalty=1.1, use_cache=False))
+    assert cached == naive, (cached, naive)
+
+    # And with sampling, given the same random stream.
+    a = list(model.generate(prompt, max_new_tokens=20, temperature=0.9,
+                            rng=np.random.default_rng(4), use_cache=True))
+    b = list(model.generate(prompt, max_new_tokens=20, temperature=0.9,
+                            rng=np.random.default_rng(4), use_cache=False))
+    assert a == b, (a, b)
+
+
+def test_generation_past_the_context_window_keeps_going():
+    """Past n_ctx the cache is rebuilt from recent tokens; output stays valid.
+
+    The two paths deliberately diverge here — the cached path keeps the recent
+    half of the window rather than re-reading a full context every step — so
+    this checks liveness, not equality.
+    """
+    model = _tiny_model(seed=6)
+    prompt = list(range(model.cfg.n_ctx - 2))
+    out = list(model.generate(prompt, max_new_tokens=20, temperature=0.7,
+                              rng=np.random.default_rng(1)))
+    assert len(out) == 20
+    assert all(0 <= t < model.cfg.vocab_size for t in out)
+
+
 def test_generate_respects_stop_and_length():
     model = _tiny_model(seed=4)
     out = list(model.generate([1, 2], max_new_tokens=5, temperature=0.8,

@@ -68,7 +68,8 @@ python -m pytest tests -q
 | Path | What it is |
 |---|---|
 | `streamlit_app.py` | The chat UI |
-| `clode/model.py` | The transformer: forward pass, hand-derived backward pass, AdamW, sampling |
+| `clode/model.py` | The transformer: forward pass, hand-derived backward pass, AdamW, KV-cached sampling |
+| `clode/evaluate.py` | Scores the trained model on held-out questions with known answers |
 | `clode/tokenizer.py` | Word-level tokenizer with chat control tokens |
 | `clode/corpus.py` | Generates the training corpus from structured facts and templates |
 | `clode/train.py` | Training loop — batching, cosine LR schedule, eval, checkpointing |

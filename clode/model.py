@@ -307,35 +307,104 @@ class Clode:
         return loss, self.backward(cache, targets)
 
     # -- generation ------------------------------------------------------
+    def _prefill(self, ids: list[int]):
+        """Run the prompt once, keeping each layer's keys and values."""
+        _, _, cache = self.forward(np.array([ids], dtype=np.int64), want_cache=True)
+        kv = [(c['k'], c['v']) for c in cache['caches']]
+        return kv, cache['logits'][0, -1]
+
+    def _decode_step(self, token: int, pos: int, kv: list):
+        """One token through the network, attending to the cached past.
+
+        This is the same computation as :meth:`forward` restricted to a single
+        position: because the keys and values of every earlier token are
+        already cached, no causal mask is needed — the cache only ever holds
+        the past and the current step.
+        """
+        cfg, p = self.cfg, self.params
+        nh, hd, D = cfg.n_head, cfg.head_dim, cfg.n_embd
+        scale = 1.0 / np.sqrt(hd)
+
+        x = (p['wte'][token] + p['wpe'][pos]).reshape(1, 1, D)
+        for i in range(cfg.n_layer):
+            h, _ = layernorm(x, p[f'h{i}.ln1_g'], p[f'h{i}.ln1_b'])
+            qkv = h @ p[f'h{i}.w_qkv'] + p[f'h{i}.b_qkv']
+            q, k, v = np.split(qkv, 3, axis=-1)
+            q = q.reshape(1, 1, nh, hd).transpose(0, 2, 1, 3)
+            k = k.reshape(1, 1, nh, hd).transpose(0, 2, 1, 3)
+            v = v.reshape(1, 1, nh, hd).transpose(0, 2, 1, 3)
+
+            K = np.concatenate([kv[i][0], k], axis=2)
+            V = np.concatenate([kv[i][1], v], axis=2)
+            kv[i] = (K, V)
+
+            att = softmax((q @ K.transpose(0, 1, 3, 2)) * scale)
+            o = (att @ V).transpose(0, 2, 1, 3).reshape(1, 1, D)
+            x = x + o @ p[f'h{i}.w_attn_proj'] + p[f'h{i}.b_attn_proj']
+
+            h2, _ = layernorm(x, p[f'h{i}.ln2_g'], p[f'h{i}.ln2_b'])
+            act = gelu(h2 @ p[f'h{i}.w_fc'] + p[f'h{i}.b_fc'])
+            x = x + act @ p[f'h{i}.w_mlp_proj'] + p[f'h{i}.b_mlp_proj']
+
+        xf, _ = layernorm(x, p['lnf_g'], p['lnf_b'])
+        return (xf @ p['wte'].T)[0, 0]
+
+    def _sample(self, row: np.ndarray, ids: list[int], temperature: float,
+                top_p: float, repetition_penalty: float,
+                rng: np.random.Generator) -> int:
+        row = row.astype(np.float64)
+        if repetition_penalty and repetition_penalty != 1.0:
+            for t in set(ids[-48:]):
+                row[t] -= np.log(repetition_penalty)
+        if temperature <= 0:
+            return int(row.argmax())
+        probs = softmax(row / temperature)
+        if 0 < top_p < 1:
+            order = np.argsort(-probs)
+            csum = np.cumsum(probs[order])
+            cut = int(np.searchsorted(csum, top_p)) + 1
+            mask = np.zeros_like(probs, dtype=bool)
+            mask[order[:cut]] = True
+            probs = np.where(mask, probs, 0.0)
+            probs /= probs.sum()
+        return int(rng.choice(len(probs), p=probs))
+
     def generate(self, prompt_ids: list[int], max_new_tokens: int = 96,
                  temperature: float = 0.9, top_p: float = 0.92,
                  repetition_penalty: float = 1.12, stop_ids: tuple[int, ...] = (),
-                 rng: np.random.Generator | None = None):
-        """Yield sampled token ids one at a time."""
+                 rng: np.random.Generator | None = None,
+                 use_cache: bool = True):
+        """Yield sampled token ids one at a time.
+
+        With ``use_cache`` (the default) each new token costs one position of
+        work instead of a full re-read of the context, which is what makes
+        interactive use bearable on a CPU. ``use_cache=False`` is the naive
+        recompute-everything path, kept because the two must agree.
+        """
         rng = rng or np.random.default_rng()
-        ids = list(prompt_ids)
+        ids = list(prompt_ids)[-self.cfg.n_ctx:]
+
+        if use_cache:
+            kv, row = self._prefill(ids)
+            for _ in range(max_new_tokens):
+                nxt = self._sample(row, ids, temperature, top_p, repetition_penalty, rng)
+                if nxt in stop_ids:
+                    return
+                ids.append(nxt)
+                yield nxt
+                if len(ids) >= self.cfg.n_ctx:
+                    # Context is full: keep the recent half and rebuild the cache.
+                    ids = ids[-(self.cfg.n_ctx // 2):]
+                    kv, row = self._prefill(ids)
+                else:
+                    row = self._decode_step(nxt, len(ids) - 1, kv)
+            return
+
         for _ in range(max_new_tokens):
             window = ids[-self.cfg.n_ctx:]
             logits, _, _ = self.forward(np.array([window], dtype=np.int64))
-            row = logits[0, -1].astype(np.float64)
-
-            if repetition_penalty and repetition_penalty != 1.0:
-                for t in set(ids[-48:]):
-                    row[t] -= np.log(repetition_penalty)
-            if temperature <= 0:
-                nxt = int(row.argmax())
-            else:
-                probs = softmax(row / temperature)
-                if 0 < top_p < 1:
-                    order = np.argsort(-probs)
-                    csum = np.cumsum(probs[order])
-                    cut = int(np.searchsorted(csum, top_p)) + 1
-                    mask = np.zeros_like(probs, dtype=bool)
-                    mask[order[:cut]] = True
-                    probs = np.where(mask, probs, 0.0)
-                    probs /= probs.sum()
-                nxt = int(rng.choice(len(probs), p=probs))
-
+            nxt = self._sample(logits[0, -1], ids, temperature, top_p,
+                               repetition_penalty, rng)
             if nxt in stop_ids:
                 return
             ids.append(nxt)
