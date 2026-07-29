@@ -80,11 +80,26 @@
       this.end = this.stoi.get('<|end|>');
     }
     static split(text) { return text.match(TOKEN_RE) || []; }
+
+    /** Token id, falling back across capitalisation before giving up.
+     *
+     * Must match Tokenizer.lookup in clode/tokenizer.py: the corpus writes
+     * proper nouns capitalised ("Japan") and people type "japan", so without
+     * this the name arrives as <|unk|> and the model has nothing to copy.
+     */
+    lookup(token) {
+      const cap = token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
+      const title = token.replace(/\w\S*/g, (w) =>
+        w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+      for (const candidate of [token, cap, token.toLowerCase(), title, token.toUpperCase()]) {
+        const id = this.stoi.get(candidate);
+        if (id !== undefined) return id;
+      }
+      return this.unk;
+    }
+
     encode(text) {
-      return Tokenizer.split(text).map((t) => {
-        const id = this.stoi.get(t);
-        return id === undefined ? this.unk : id;
-      });
+      return Tokenizer.split(text).map((t) => this.lookup(t));
     }
     join(tokens) {
       const out = [];

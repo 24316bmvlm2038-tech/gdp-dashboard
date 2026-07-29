@@ -48,11 +48,11 @@ CASES: list[tuple[str, str, tuple[str, ...]]] = [
     ('facts', 'what is the boiling point of water', ('100',)),
     ('facts', 'how many sides does a triangle have', ('3',)),
 
-    ('python', 'how do i reverse a list in python', ('reverse', '[::-1]')),
+    ('python', 'how do i reverse a list in python', ('reverse', '[::-1]', 'reversed copy')),
     ('python', 'how do i sort a list in python', ('sorted', 'sort')),
     ('python', 'how do i read a file in python', ('open',)),
     ('python', 'how do i swap two variables in python', ('a, b = b, a', 'one line')),
-    ('python', 'how do i reverse a string', ('[::-1]',)),
+    ('python', 'how do i reverse a string', ('[::-1]', 'Slice it backwards')),
 
     ('definitions', 'what is a variable', ('named box', 'value')),
     ('definitions', 'what is recursion', ('itself',)),
