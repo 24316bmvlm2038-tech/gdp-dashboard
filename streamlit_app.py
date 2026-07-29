@@ -19,6 +19,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from clode import search as websearch
 from clode.backends import (
     API_MODELS,
     DEFAULT_SYSTEM,
@@ -151,6 +152,12 @@ with st.sidebar:
         effort = 'high'
         temperature = st.slider('Temperature', 0.1, 1.4, 0.75, 0.05)
 
+    web_on = st.toggle('🌐 Live web search', value=False,
+                       help='Claude searches the web itself. Clode-mini cannot read '
+                            'web pages, so the app searches and shows the source.')
+    if web_on:
+        st.caption(f'Provider: **{"Claude (server-side)" if engine == "Claude API" else websearch.provider_name()}**')
+
     st.markdown('---')
     st.caption('Conversations')
     for chat_id in store['order'][:25]:
@@ -178,6 +185,36 @@ with st.sidebar:
 # --------------------------------------------------------------------------
 # chat surface
 # --------------------------------------------------------------------------
+
+def answer_from_web(query: str) -> str:
+    """Search the web and render the findings, attributed to their sources."""
+    with st.spinner(f'Searching the web via {websearch.provider_name()}…'):
+        try:
+            results = websearch.search(query, limit=4)
+        except websearch.SearchError as exc:
+            message = (f'⚠️ The search did not go through: {exc}\n\n'
+                       'This machine may block outbound web requests. Setting '
+                       '`BRAVE_API_KEY` or `SERPER_API_KEY` switches provider.')
+            st.warning(message)
+            return message
+
+    if not results:
+        message = f'The search for “{query}” came back empty.'
+        st.write(message)
+        return message
+
+    lines = [f'**From the web** — searched with {websearch.provider_name()}', '']
+    for r in results:
+        lines.append(f'- **[{r.title}]({r.url})** — {r.snippet or "no summary given"}  '
+                     f'<br/><span style="opacity:.65">{r.cite()}</span>')
+    lines.append('')
+    lines.append('<span style="opacity:.65">Clode-mini has a 1,700 word vocabulary and '
+                 'a 128 token context, so it cannot read these pages. This is what the '
+                 'sources say, not what the model knows.</span>')
+    body = '\n'.join(lines)
+    st.markdown(body, unsafe_allow_html=True)
+    return body
+
 
 chat = store['chats'][st.session_state.current]
 
@@ -218,7 +255,13 @@ if prompt:
         try:
             if engine == 'Claude API':
                 backend = AnthropicBackend(model=model_id)
-                reply = st.write_stream(backend.stream(history, DEFAULT_SYSTEM, effort=effort))
+                reply = st.write_stream(
+                    backend.stream(history, DEFAULT_SYSTEM, effort=effort,
+                                   web_search=web_on))
+            elif web_on:
+                # Clode-mini cannot read web prose, so the app answers from the
+                # source and says so, rather than dressing it up as the model's.
+                reply = answer_from_web(prompt)
             else:
                 backend = get_local_backend(Path('data/clode-mini.npz').stat().st_mtime)
                 reply = st.write_stream(backend.stream(history, temperature=temperature))

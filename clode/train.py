@@ -51,6 +51,39 @@ def lr_at(step: int, steps: int, base_lr: float, warmup: int, min_ratio: float =
     return base_lr * (min_ratio + (1 - min_ratio) * cosine)
 
 
+def warm_start(old_weights: Path, old_vocab: Path, tok: Tokenizer, cfg: Config) -> Clode:
+    """Carry a previous run's learning into a new, larger vocabulary.
+
+    Growing the corpus grows the vocabulary, which changes the shape of the
+    token embedding and would normally mean starting from scratch. Everything
+    except that embedding is shape-compatible, though, and embeddings for
+    words that survive into the new vocabulary can be copied across by name —
+    so only genuinely new words start from random.
+    """
+    old = Clode.load(old_weights)
+    old_tok = Tokenizer.load(old_vocab)
+    model = Clode(cfg)
+
+    carried = 0
+    for name, value in old.params.items():
+        if name == 'wte':
+            continue
+        if name in model.params and model.params[name].shape == value.shape:
+            model.params[name] = value.copy()
+            carried += 1
+
+    rows = 0
+    for token, new_id in tok.stoi.items():
+        old_id = old_tok.stoi.get(token)
+        if old_id is not None:
+            model.params['wte'][new_id] = old.params['wte'][old_id]
+            rows += 1
+
+    print(f'warm start: carried {carried} tensors, {rows}/{tok.vocab_size} '
+          f'embedding rows ({rows / tok.vocab_size:.0%} of the new vocabulary)')
+    return model
+
+
 def sample(model: Clode, tok: Tokenizer, prompt: str, max_new_tokens: int = 48) -> str:
     ids = tok.encode(f'<|user|> {prompt} <|assistant|>')
     out = list(model.generate(ids, max_new_tokens=max_new_tokens, temperature=0.7,
@@ -73,6 +106,10 @@ def main() -> None:
     ap.add_argument('--save-every', type=int, default=200)
     ap.add_argument('--max-vocab', type=int, default=4096)
     ap.add_argument('--resume', action='store_true')
+    ap.add_argument('--warm-start', type=str, default=None,
+                    help='checkpoint to carry into the new vocabulary')
+    ap.add_argument('--warm-vocab', type=str, default=None,
+                    help='vocabulary that checkpoint was trained with')
     args = ap.parse_args()
 
     text = CORPUS.read_text(encoding='utf-8')
@@ -86,12 +123,14 @@ def main() -> None:
     train_ids, val_ids = ids[:split_at], ids[split_at:]
     print(f'vocab {tok.vocab_size} | train {len(train_ids):,} tokens | val {len(val_ids):,}')
 
+    cfg = Config(vocab_size=tok.vocab_size, n_ctx=args.n_ctx, n_embd=args.n_embd,
+                 n_head=args.n_head, n_layer=args.n_layer)
     if args.resume and WEIGHTS.exists():
         model = Clode.load(WEIGHTS)
         print('resumed from checkpoint')
+    elif args.warm_start:
+        model = warm_start(Path(args.warm_start), Path(args.warm_vocab), tok, cfg)
     else:
-        cfg = Config(vocab_size=tok.vocab_size, n_ctx=args.n_ctx, n_embd=args.n_embd,
-                     n_head=args.n_head, n_layer=args.n_layer)
         model = Clode(cfg)
     print(f'parameters: {model.n_params:,}')
 

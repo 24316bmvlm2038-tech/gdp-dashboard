@@ -66,7 +66,7 @@ class AnthropicBackend:
         return bool(os.environ.get('ANTHROPIC_API_KEY'))
 
     def stream(self, messages: Iterable[Message], system: str = DEFAULT_SYSTEM,
-               effort: str = 'high') -> Iterator[str]:
+               effort: str = 'high', web_search: bool = False) -> Iterator[str]:
         payload = [{'role': m.role, 'content': m.content} for m in messages]
         kwargs = dict(
             model=self.model,
@@ -75,6 +75,11 @@ class AnthropicBackend:
             messages=payload,
             output_config={'effort': effort},
         )
+        if web_search:
+            # Anthropic runs the search server-side: Claude decides when to
+            # search, and the results never pass through this process.
+            kwargs['tools'] = [{'type': 'web_search_20260209', 'name': 'web_search',
+                                'max_uses': 5}]
         try:
             # Server-side fallbacks keep a policy refusal from dead-ending the
             # conversation: the API retries on the recommended model instead.
@@ -139,7 +144,16 @@ class LocalBackend:
         return (kept + prompt)[-self.model.cfg.n_ctx:]
 
     def stream(self, messages: Iterable[Message], system: str = '',
-               temperature: float = 0.75, max_new_tokens: int = 80) -> Iterator[str]:
+               temperature: float = 0.75, max_new_tokens: int = 80,
+               grounding: str = '') -> Iterator[str]:
+        """Generate a reply.
+
+        ``grounding`` is accepted so the caller can pass retrieved web text,
+        but it is deliberately *not* fed to the model: with a 1,700 word
+        vocabulary and a 128 token context, web prose arrives as almost all
+        unknown tokens and derails the reply. The app shows the retrieved text
+        itself, attributed, instead of laundering it through the model.
+        """
         ids = self._prompt_ids(messages)
         emitted: list[str] = []
         text = ''
