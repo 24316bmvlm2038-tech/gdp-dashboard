@@ -166,3 +166,7 @@ cython_debug/
 data/photoshare.json
 data/uploads/
 data/demo/
+
+# Clode runtime data (saved conversations and training stdout)
+data/chats.json
+data/train.out

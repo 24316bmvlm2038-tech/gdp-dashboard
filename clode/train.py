@@ -1,0 +1,133 @@
+"""Train the Clode model on ``data/corpus.txt``.
+
+    python -m clode.train --steps 3000
+
+Checkpoints are written to ``data/clode-mini.npz`` every ``--save-every``
+steps, so the chat app can be tried out while training is still running.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import time
+from pathlib import Path
+
+import numpy as np
+
+from clode.model import Adam, Clode, Config
+from clode.tokenizer import Tokenizer
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / 'data'
+CORPUS = DATA / 'corpus.txt'
+WEIGHTS = DATA / 'clode-mini.npz'
+VOCAB = DATA / 'clode-vocab.json'
+LOG = DATA / 'training-log.json'
+
+
+def get_batch(tokens: np.ndarray, batch_size: int, n_ctx: int, rng: np.random.Generator):
+    ix = rng.integers(0, len(tokens) - n_ctx - 1, size=batch_size)
+    x = np.stack([tokens[i:i + n_ctx] for i in ix])
+    y = np.stack([tokens[i + 1:i + 1 + n_ctx] for i in ix])
+    return x, y
+
+
+def evaluate(model: Clode, tokens: np.ndarray, batch_size: int, batches: int, seed: int = 0) -> float:
+    rng = np.random.default_rng(seed)
+    total = 0.0
+    for _ in range(batches):
+        x, y = get_batch(tokens, batch_size, model.cfg.n_ctx, rng)
+        total += model.forward(x, y)[1]
+    return total / batches
+
+
+def lr_at(step: int, steps: int, base_lr: float, warmup: int, min_ratio: float = 0.1) -> float:
+    if step < warmup:
+        return base_lr * (step + 1) / warmup
+    progress = (step - warmup) / max(1, steps - warmup)
+    cosine = 0.5 * (1 + math.cos(math.pi * min(1.0, progress)))
+    return base_lr * (min_ratio + (1 - min_ratio) * cosine)
+
+
+def sample(model: Clode, tok: Tokenizer, prompt: str, max_new_tokens: int = 48) -> str:
+    ids = tok.encode(f'<|user|> {prompt} <|assistant|>')
+    out = list(model.generate(ids, max_new_tokens=max_new_tokens, temperature=0.7,
+                              top_p=0.9, stop_ids=(tok.end_id, tok.user_id),
+                              rng=np.random.default_rng(0)))
+    return tok.decode(out)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--steps', type=int, default=3000)
+    ap.add_argument('--batch-size', type=int, default=32)
+    ap.add_argument('--n-ctx', type=int, default=128)
+    ap.add_argument('--n-embd', type=int, default=256)
+    ap.add_argument('--n-head', type=int, default=4)
+    ap.add_argument('--n-layer', type=int, default=4)
+    ap.add_argument('--lr', type=float, default=6e-4)
+    ap.add_argument('--warmup', type=int, default=100)
+    ap.add_argument('--eval-every', type=int, default=100)
+    ap.add_argument('--save-every', type=int, default=200)
+    ap.add_argument('--max-vocab', type=int, default=4096)
+    ap.add_argument('--resume', action='store_true')
+    args = ap.parse_args()
+
+    text = CORPUS.read_text(encoding='utf-8')
+    if VOCAB.exists() and args.resume:
+        tok = Tokenizer.load(VOCAB)
+    else:
+        tok = Tokenizer.train(text, max_vocab=args.max_vocab)
+        tok.save(VOCAB)
+    ids = np.array(tok.encode(text), dtype=np.int64)
+    split_at = int(len(ids) * 0.98)
+    train_ids, val_ids = ids[:split_at], ids[split_at:]
+    print(f'vocab {tok.vocab_size} | train {len(train_ids):,} tokens | val {len(val_ids):,}')
+
+    if args.resume and WEIGHTS.exists():
+        model = Clode.load(WEIGHTS)
+        print('resumed from checkpoint')
+    else:
+        cfg = Config(vocab_size=tok.vocab_size, n_ctx=args.n_ctx, n_embd=args.n_embd,
+                     n_head=args.n_head, n_layer=args.n_layer)
+        model = Clode(cfg)
+    print(f'parameters: {model.n_params:,}')
+
+    opt = Adam(model.params, lr=args.lr, weight_decay=0.01)
+    rng = np.random.default_rng(0)
+    history: list[dict] = []
+    started = time.time()
+    best_val = float('inf')
+
+    for step in range(args.steps):
+        lr = lr_at(step, args.steps, args.lr, args.warmup)
+        x, y = get_batch(train_ids, args.batch_size, model.cfg.n_ctx, rng)
+        loss, grads = model.loss_and_grads(x, y)
+        gnorm = opt.step(grads, lr=lr)
+
+        if step % args.eval_every == 0 or step == args.steps - 1:
+            val = evaluate(model, val_ids, args.batch_size, batches=6)
+            best_val = min(best_val, val)
+            elapsed = time.time() - started
+            print(f'step {step:5d}/{args.steps} | loss {loss:.3f} | val {val:.3f} '
+                  f'| ppl {math.exp(min(val, 20)):7.2f} | lr {lr:.2e} | gnorm {gnorm:5.2f} '
+                  f'| {elapsed / 60:.1f} min', flush=True)
+            history.append({'step': step, 'train_loss': loss, 'val_loss': val,
+                            'lr': lr, 'elapsed_s': round(elapsed, 1)})
+            LOG.write_text(json.dumps(history, indent=1), encoding='utf-8')
+
+        if step and step % args.save_every == 0:
+            model.save(WEIGHTS)
+
+    model.save(WEIGHTS)
+    print(f'\nsaved {WEIGHTS} after {(time.time() - started) / 60:.1f} min '
+          f'(best val {best_val:.3f})')
+    for prompt in ['who are you', 'what is the capital of japan', 'what is 12 + 30',
+                   'how do i reverse a list in python', 'hello']:
+        print(f'\n> {prompt}\n{sample(model, tok, prompt)}')
+
+
+if __name__ == '__main__':
+    main()
