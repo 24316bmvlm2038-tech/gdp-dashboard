@@ -1,0 +1,11 @@
+[
+ {
+  "when": "2026-07-29T12:07:09+00:00",
+  "steps": 5,
+  "before": 32,
+  "after": 24,
+  "total": 35,
+  "promoted": false,
+  "minutes": 8.3
+ }
+]
