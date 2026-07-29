@@ -196,10 +196,16 @@ def search_controls(engine: str) -> bool:
     the web or out of the model is the single most important thing to know
     about it, and it should be readable without opening anything.
     """
-    left, right = st.columns([1, 2.6])
+    left, mid, right = st.columns([1, 1, 2.2])
     with left:
         on = st.toggle('🌐  Search the web', value=st.session_state.get('web_on', False),
                        key='web_on')
+    with mid:
+        if on:
+            st.toggle('🔍  Deep search', value=st.session_state.get('deep_on', False),
+                      key='deep_on',
+                      help='Search, read what comes back, then search again on the '
+                           'terms those results introduced.')
     with right:
         if not on:
             st.markdown('<div class="searchline off">Off — answers come only from '
@@ -217,31 +223,67 @@ def search_controls(engine: str) -> bool:
     return on
 
 
-def answer_from_web(query: str) -> str:
-    """Search the web and render the findings, attributed to their sources."""
-    with st.status(f'Searching the web with {websearch.provider_name()}…',
-                   expanded=True) as box:
-        try:
-            results = websearch.search(query, limit=4)
-        except websearch.SearchError as exc:
-            box.update(label='Search failed', state='error')
-            message = (f'⚠️ **The search did not go through.** {exc}\n\n'
-                       'This machine may block outbound web requests. Setting '
-                       '`BRAVE_API_KEY` or `SERPER_API_KEY` switches provider.')
-            st.markdown(message)
-            return message
-        box.update(label=f'Found {len(results)} results for “{query}”', state='complete')
+def _failure_note(exc: Exception) -> str:
+    return (f'⚠️ **The search did not go through.** {exc}\n\n'
+            'This machine may block outbound web requests. Setting '
+            '`BRAVE_API_KEY` or `SERPER_API_KEY` switches provider.')
 
-    if not results:
-        message = f'The search for “{query}” came back empty.'
-        st.write(message)
+
+def answer_from_web(query: str, deep: bool = False) -> str:
+    """Search the web and render the findings, attributed to their sources.
+
+    Deep search runs several rounds, each query chosen from the terms the last
+    round's results introduced. Every round is shown as it happens, so what
+    was searched is as visible as what came back.
+    """
+    provider = websearch.provider_name()
+    rounds: list[tuple[str, list]] = []
+    failures: list[Exception] = []
+    label = f'{"Deep search" if deep else "Searching"} with {provider}…'
+
+    with st.status(label, expanded=True) as box:
+        try:
+            if deep:
+                stream = websearch.deep_search(query, rounds=2, limit=4, per_round=2)
+            else:
+                stream = iter([(query, websearch.search(query, limit=4))])
+            for asked, found in stream:
+                if isinstance(found, Exception):
+                    failures.append(found)
+                    st.markdown(f'✗ `{asked}` — {found}')
+                    continue
+                rounds.append((asked, found))
+                st.markdown(f'✓ `{asked}` — {len(found)} results')
+        except websearch.SearchError as exc:
+            failures.append(exc)
+
+        total = sum(len(r) for _, r in rounds)
+        if not total:
+            box.update(label='Search failed', state='error')
+        else:
+            box.update(label=f'{total} results across {len(rounds)} '
+                             f'{"searches" if len(rounds) > 1 else "search"}',
+                       state='complete')
+
+    if not total:
+        message = _failure_note(failures[0]) if failures else \
+            f'The search for “{query}” came back empty.'
+        st.markdown(message)
         return message
 
-    lines = [f'🌐 **Live from the web** — {websearch.provider_name()}, just now', '']
-    for i, r in enumerate(results, 1):
-        lines.append(f'**{i}. [{r.title}]({r.url})**  \n'
-                     f'{r.snippet or "No summary was given for this result."}  \n'
-                     f'<span class="src">{r.cite()}</span>\n')
+    lines = [f'🌐 **Live from the web** — {provider}, just now', '']
+    n = 0
+    for asked, found in rounds:
+        if len(rounds) > 1:
+            lines.append(f'*searched:* `{asked}`')
+        for r in found:
+            n += 1
+            lines.append(f'**{n}. [{r.title}]({r.url})**  \n'
+                         f'{r.snippet or "No summary was given for this result."}  \n'
+                         f'<span class="src">{r.cite()}</span>\n')
+    if failures:
+        lines.append(f'<span class="src">{len(failures)} of the searches failed; '
+                     'the results above are the ones that came back.</span>\n')
     lines.append('<span class="src">These are the sources\' words, quoted. Clode-mini '
                  'cannot read web pages, so it did not write this answer.</span>')
     body = '\n'.join(lines)
@@ -291,13 +333,17 @@ if prompt:
         try:
             if engine == 'Claude API':
                 backend = AnthropicBackend(model=model_id)
+                system = DEFAULT_SYSTEM
+                if web_on and st.session_state.get('deep_on'):
+                    system += (' Research thoroughly: search, read what you find, '
+                               'then search again on what it raises, before answering. '
+                               'Cite the sources you used.')
                 reply = st.write_stream(
-                    backend.stream(history, DEFAULT_SYSTEM, effort=effort,
-                                   web_search=web_on))
+                    backend.stream(history, system, effort=effort, web_search=web_on))
             elif web_on:
                 # Clode-mini cannot read web prose, so the app answers from the
                 # source and says so, rather than dressing it up as the model's.
-                reply = answer_from_web(prompt)
+                reply = answer_from_web(prompt, deep=st.session_state.get('deep_on', False))
             else:
                 backend = get_local_backend(Path('data/clode-mini.npz').stat().st_mtime)
                 reply = st.write_stream(backend.stream(history, temperature=temperature))

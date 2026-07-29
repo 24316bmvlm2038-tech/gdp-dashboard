@@ -179,6 +179,68 @@ def search(query: str, limit: int = 5) -> list[Result]:
     return duckduckgo(query, limit)
 
 
+def follow_up_queries(query: str, results: list[Result], limit: int = 3) -> list[str]:
+    """Second-round queries derived from what the first round turned up.
+
+    Deep search means reading the first results and asking better questions,
+    not asking the same question repeatedly. Without a model to plan with, the
+    signal available here is the vocabulary the sources themselves used: terms
+    that recur across several results, and that the original query did not
+    contain, are what the topic is actually about.
+    """
+    asked = {w.lower().strip('.,()') for w in query.split()}
+    counts: dict[str, int] = {}
+    for r in results:
+        seen_here = set()
+        for raw in f'{r.title} {r.snippet}'.split():
+            word = raw.strip('.,:;()[]"\'').lower()
+            if len(word) < 4 or word in asked or word in STOPWORDS or not word.isalpha():
+                continue
+            if word in seen_here:
+                continue
+            seen_here.add(word)
+            counts[word] = counts.get(word, 0) + 1
+
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [f'{query} {word}' for word, count in ranked[:limit] if count > 1]
+
+
+STOPWORDS = {
+    'about', 'after', 'also', 'been', 'being', 'from', 'have', 'here', 'more',
+    'most', 'much', 'other', 'over', 'said', 'same', 'some', 'such', 'than',
+    'that', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'those',
+    'through', 'time', 'very', 'were', 'what', 'when', 'where', 'which', 'while',
+    'with', 'would', 'your', 'https', 'http', 'www', 'com', 'wikipedia', 'news',
+}
+
+
+def deep_search(query: str, rounds: int = 2, limit: int = 4, per_round: int = 3):
+    """Search, read what came back, then search again on what it suggests.
+
+    Yields ``(query, results)`` per round so a caller can show the work as it
+    happens. Results are de-duplicated by URL across rounds, and a round that
+    fails does not discard the rounds before it.
+    """
+    seen_urls: set[str] = set()
+    current = [query]
+    for round_number in range(rounds):
+        next_queries: list[str] = []
+        for q in current[:per_round]:
+            try:
+                found = search(q, limit=limit)
+            except SearchError as exc:
+                yield q, exc
+                continue
+            fresh = [r for r in found if r.url not in seen_urls]
+            seen_urls.update(r.url for r in fresh)
+            yield q, fresh
+            if round_number + 1 < rounds:
+                next_queries.extend(follow_up_queries(q, found))
+        if not next_queries:
+            return
+        current = next_queries
+
+
 def as_context(results: list[Result], budget: int = 600) -> str:
     """Compact the results into something that can precede a prompt."""
     lines = []

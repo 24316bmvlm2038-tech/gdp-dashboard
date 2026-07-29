@@ -133,3 +133,69 @@ def test_context_is_numbered_and_bounded():
     context = S.as_context(results, budget=200)
     assert context.startswith('[1] Title 0 (example.com):')
     assert len(context) <= 200
+
+
+# --- deep search ----------------------------------------------------------
+
+def _result(title, url, snippet=''):
+    return S.Result(title, url, snippet)
+
+
+def test_follow_ups_use_terms_the_query_did_not_have():
+    results = [
+        _result('Mars rover Perseverance lands', 'https://a.com/1',
+                'The Perseverance rover collected samples in Jezero crater.'),
+        _result('Perseverance drills again', 'https://b.com/2',
+                'NASA says Perseverance found organic samples.'),
+    ]
+    follow = S.follow_up_queries('mars rover', results)
+    assert follow, 'expected at least one follow-up query'
+    assert all(q.startswith('mars rover ') for q in follow)
+    joined = ' '.join(follow)
+    assert 'perseverance' in joined      # recurs across results
+    assert 'rover' not in joined.replace('mars rover ', '')  # already asked
+
+
+def test_follow_ups_ignore_one_off_and_stopword_terms():
+    results = [_result('A', 'https://a.com', 'that which through unique')]
+    assert S.follow_up_queries('topic', results) == []
+
+
+def test_deep_search_runs_a_second_round_on_what_it_found(monkeypatch):
+    calls = []
+
+    def fake_search(q, limit=5):
+        calls.append(q)
+        if q == 'mars rover':
+            return [_result('Perseverance one', 'https://a.com/1', 'Perseverance samples'),
+                    _result('Perseverance two', 'https://b.com/2', 'Perseverance samples')]
+        return [_result('Deeper', 'https://c.com/3', 'more detail')]
+
+    monkeypatch.setattr(S, 'search', fake_search)
+    rounds = list(S.deep_search('mars rover', rounds=2, per_round=1))
+    assert calls[0] == 'mars rover'
+    assert len(calls) > 1, 'second round never ran'
+    assert calls[1].startswith('mars rover ')
+    assert rounds[-1][1][0].url == 'https://c.com/3'
+
+
+def test_deep_search_does_not_repeat_urls(monkeypatch):
+    same = [_result('Same', 'https://a.com/1', 'Perseverance rover samples')]
+    monkeypatch.setattr(S, 'search', lambda q, limit=5: same)
+    seen = [r.url for _, results in S.deep_search('mars rover', rounds=2, per_round=1)
+            if not isinstance(results, Exception) for r in results]
+    assert seen == ['https://a.com/1']
+
+
+def test_deep_search_surfaces_a_failed_round_without_losing_the_rest(monkeypatch):
+    def flaky(q, limit=5):
+        if q == 'seed':
+            # Two results sharing a term, so a follow-up round is generated.
+            return [_result('Alpha', 'https://a.com', 'beta gamma'),
+                    _result('Alpha two', 'https://b.com', 'beta gamma')]
+        raise S.SearchError('provider refused')
+
+    monkeypatch.setattr(S, 'search', flaky)
+    rounds = list(S.deep_search('seed', rounds=2, per_round=1))
+    assert isinstance(rounds[0][1], list)
+    assert isinstance(rounds[-1][1], S.SearchError)
