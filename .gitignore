@@ -170,3 +170,7 @@ data/demo/
 # Clode runtime data (saved conversations and training stdout)
 data/chats.json
 data/train.out
+
+# Clode web build outputs (regenerate with tools/export_web.py + tools/build_web.py)
+data/clode-web.json
+web/clode-mini.html
