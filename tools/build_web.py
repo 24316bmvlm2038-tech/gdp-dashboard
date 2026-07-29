@@ -20,11 +20,30 @@ HISTORY = ROOT / 'data' / 'training-log.json'
 OUT = ROOT / 'web' / 'clode-mini.html'
 
 
+def load_history() -> list[dict]:
+    """The loss curve for the weights being shipped.
+
+    ``training-log.json`` belongs to whatever run is going *now*, which may be
+    a fresh one with a couple of points in it. The curve should describe the
+    weights in the page, so the longest recorded run wins — a run in its first
+    minutes never replaces the history that actually produced the model.
+    """
+    candidates = sorted(HISTORY.parent.glob('training-log*.json'))
+    best: list[dict] = []
+    for path in candidates:
+        try:
+            points = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if len(points) > len(best):
+            best = points
+    return [{'step': p['step'], 'val_loss': round(p['val_loss'], 4)} for p in best]
+
+
 def main(out: Path = OUT) -> Path:
     html = TEMPLATE.read_text(encoding='utf-8')
     payload = EXPORT.read_text(encoding='utf-8')
-    history = json.loads(HISTORY.read_text(encoding='utf-8')) if HISTORY.exists() else []
-    trimmed = [{'step': h['step'], 'val_loss': round(h['val_loss'], 4)} for h in history]
+    trimmed = load_history()
 
     html = html.replace('/*__CLODE_JS__*/', MODEL_JS.read_text(encoding='utf-8'))
     html = html.replace('/*__PAYLOAD__*/', payload)

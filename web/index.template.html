@@ -122,6 +122,21 @@
   .curve-note { font-family: var(--mono); font-size: .72rem; color: var(--muted);
                 margin-top: .4rem; font-variant-numeric: tabular-nums; }
 
+  .websearch { padding: .9rem; border-top: 1px solid var(--line); font-size: .84rem;
+               color: var(--muted); display: flex; flex-direction: column; gap: .6rem; }
+  .ws-head { font-family: var(--mono); font-size: .68rem; text-transform: uppercase;
+             letter-spacing: .1em; color: var(--text); display: flex;
+             align-items: center; gap: .45rem; }
+  .ws-dot { width: .5rem; height: .5rem; border-radius: 50%;
+            border: 1px solid var(--muted); flex: none; }
+  .websearch p, .websearch ul { margin: 0; }
+  .websearch ul { padding-left: 1.05rem; display: flex; flex-direction: column;
+                  gap: .35rem; }
+  .websearch b { color: var(--text); }
+  .websearch pre { margin: 0; overflow-x: auto; background: var(--surface-2);
+                   border-radius: 6px; padding: .5rem .6rem; }
+  .websearch code { font-family: var(--mono); font-size: .74rem; color: var(--teal); }
+
   .notes { margin-top: 1.5rem; border-top: 1px solid var(--line); padding-top: 1.1rem;
            display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
            gap: 1.2rem; font-size: .88rem; color: var(--muted); }
@@ -176,6 +191,24 @@
         <canvas id="curve" aria-label="Validation loss falling across training steps"></canvas>
         <div class="curve-note" id="curve-note">—</div>
       </figure>
+
+      <section class="websearch">
+        <div class="ws-head"><span class="ws-dot" aria-hidden="true"></span>
+          web search — off on this page</div>
+        <p>Everything here runs inside your tab. A published page like this one is
+          sandboxed and cannot make network requests: nothing you type leaves the
+          browser, and nothing can be fetched into it. Every answer above comes from
+          the weights embedded in this file.</p>
+        <p>Search lives in the full app, where there is a real network. It has two
+          modes, and the app always states which one you are in:</p>
+        <ul>
+          <li><b>With Claude</b> — Claude runs the search itself and cites what it used.</li>
+          <li><b>With Clode-mini</b> — the app searches (DuckDuckGo by default; Brave or
+            Serper with a key) and shows the sources. Clode-mini cannot read a web page,
+            so it does not write those answers.</li>
+        </ul>
+        <pre><code>streamlit run streamlit_app.py</code></pre>
+      </section>
     </aside>
   </main>
 
@@ -201,7 +234,8 @@
         loop are all written from scratch in NumPy; every gradient is checked against
         finite differences in <code>tests/test_model.py</code>. It was trained in
         stages on a growing corpus, each stage warm-started from the last — the curve
-        above is the final stage.</p>
+        above is the first stage, taking it from random initialisation to a working
+        model.</p>
     </div>
   </div>
 </div>
