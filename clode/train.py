@@ -126,13 +126,17 @@ def main() -> None:
     # Training writes here, not over the model the app is serving: a long run
     # would otherwise rewrite the released weights every few minutes.
     out = Path(args.out) if args.out else CHECKPOINTS / 'clode-training.npz'
+    # The vocabulary is part of the checkpoint: weights trained on one
+    # vocabulary are meaningless with another, so they are written together
+    # and promoted together.
+    out_vocab = out.with_name(out.stem + '-vocab.json')
 
     text = CORPUS.read_text(encoding='utf-8')
-    if VOCAB.exists() and args.resume:
-        tok = Tokenizer.load(VOCAB)
+    if out_vocab.exists() and args.resume:
+        tok = Tokenizer.load(out_vocab)
     else:
         tok = Tokenizer.train(text, max_vocab=args.max_vocab)
-        tok.save(VOCAB)
+    tok.save(out_vocab)
     ids = np.array(tok.encode(text), dtype=np.int64)
     split_at = int(len(ids) * 0.98)
     train_ids, val_ids = ids[:split_at], ids[split_at:]
@@ -182,7 +186,8 @@ def main() -> None:
         # The finished run becomes the released model in one step, so the
         # tracked file changes once per run rather than once per checkpoint.
         shutil.copyfile(out, WEIGHTS)
-        print(f'promoted to {WEIGHTS}')
+        shutil.copyfile(out_vocab, VOCAB)
+        print(f'promoted to {WEIGHTS} (with its vocabulary)')
     for prompt in ['who are you', 'what is the capital of japan', 'what is 12 + 30',
                    'how do i reverse a list in python', 'hello']:
         print(f'\n> {prompt}\n{sample(model, tok, prompt)}')

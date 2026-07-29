@@ -55,6 +55,15 @@ STYLE = """
     font-size: .72rem; border: 1px solid #ded9cc; background: #fff; color: #6b6862;
   }
   .clode-pill.on { border-color: var(--clode-accent); color: var(--clode-accent); }
+  .searchline { font-size: .88rem; padding-top: .55rem; color: #6b6862; }
+  .searchline.on { color: var(--clode-accent); }
+  .searchline b { color: inherit; }
+  .rule { border-top: 1px solid #e5e1d6; margin: .35rem 0 .9rem; }
+  .src { font-size: .8rem; opacity: .6; }
+  @media (prefers-color-scheme: dark) {
+    .searchline { color: #a8a49b; }
+    .rule { border-top-color: #35342f; }
+  }
   @media (prefers-color-scheme: dark) {
     .stApp { background: #262624; }
     section[data-testid='stSidebar'] { background: #1f1e1d; border-right-color: #35342f; }
@@ -152,12 +161,6 @@ with st.sidebar:
         effort = 'high'
         temperature = st.slider('Temperature', 0.1, 1.4, 0.75, 0.05)
 
-    web_on = st.toggle('🌐 Live web search', value=False,
-                       help='Claude searches the web itself. Clode-mini cannot read '
-                            'web pages, so the app searches and shows the source.')
-    if web_on:
-        st.caption(f'Provider: **{"Claude (server-side)" if engine == "Claude API" else websearch.provider_name()}**')
-
     st.markdown('---')
     st.caption('Conversations')
     for chat_id in store['order'][:25]:
@@ -186,31 +189,61 @@ with st.sidebar:
 # chat surface
 # --------------------------------------------------------------------------
 
+def search_controls(engine: str) -> bool:
+    """The web-search switch, stated plainly above the conversation.
+
+    It sits here rather than in the sidebar because whether an answer came off
+    the web or out of the model is the single most important thing to know
+    about it, and it should be readable without opening anything.
+    """
+    left, right = st.columns([1, 2.6])
+    with left:
+        on = st.toggle('🌐  Search the web', value=st.session_state.get('web_on', False),
+                       key='web_on')
+    with right:
+        if not on:
+            st.markdown('<div class="searchline off">Off — answers come only from '
+                        'what the model learned during training.</div>',
+                        unsafe_allow_html=True)
+        elif engine == 'Claude API':
+            st.markdown('<div class="searchline on">On — Claude runs the search itself '
+                        'and cites what it used.</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div class="searchline on">On — the app searches with '
+                f'<b>{websearch.provider_name()}</b> and shows the sources. Clode-mini '
+                'cannot read web pages, so it does not answer these.</div>',
+                unsafe_allow_html=True)
+    return on
+
+
 def answer_from_web(query: str) -> str:
     """Search the web and render the findings, attributed to their sources."""
-    with st.spinner(f'Searching the web via {websearch.provider_name()}…'):
+    with st.status(f'Searching the web with {websearch.provider_name()}…',
+                   expanded=True) as box:
         try:
             results = websearch.search(query, limit=4)
         except websearch.SearchError as exc:
-            message = (f'⚠️ The search did not go through: {exc}\n\n'
+            box.update(label='Search failed', state='error')
+            message = (f'⚠️ **The search did not go through.** {exc}\n\n'
                        'This machine may block outbound web requests. Setting '
                        '`BRAVE_API_KEY` or `SERPER_API_KEY` switches provider.')
-            st.warning(message)
+            st.markdown(message)
             return message
+        box.update(label=f'Found {len(results)} results for “{query}”', state='complete')
 
     if not results:
         message = f'The search for “{query}” came back empty.'
         st.write(message)
         return message
 
-    lines = [f'**From the web** — searched with {websearch.provider_name()}', '']
-    for r in results:
-        lines.append(f'- **[{r.title}]({r.url})** — {r.snippet or "no summary given"}  '
-                     f'<br/><span style="opacity:.65">{r.cite()}</span>')
-    lines.append('')
-    lines.append('<span style="opacity:.65">Clode-mini has a 1,700 word vocabulary and '
-                 'a 128 token context, so it cannot read these pages. This is what the '
-                 'sources say, not what the model knows.</span>')
+    lines = [f'🌐 **Live from the web** — {websearch.provider_name()}, just now', '']
+    for i, r in enumerate(results, 1):
+        lines.append(f'**{i}. [{r.title}]({r.url})**  \n'
+                     f'{r.snippet or "No summary was given for this result."}  \n'
+                     f'<span class="src">{r.cite()}</span>\n')
+    lines.append('<span class="src">These are the sources\' words, quoted. Clode-mini '
+                 'cannot read web pages, so it did not write this answer.</span>')
     body = '\n'.join(lines)
     st.markdown(body, unsafe_allow_html=True)
     return body
@@ -233,6 +266,9 @@ else:
             detail = ''
     st.markdown(f'<div class="clode-sub">Talking to <b>Clode-mini</b>{detail}.</div>',
                 unsafe_allow_html=True)
+
+web_on = search_controls(engine)
+st.markdown('<div class="rule"></div>', unsafe_allow_html=True)
 
 for msg in chat['messages']:
     with st.chat_message(msg['role'], avatar='✳️' if msg['role'] == 'assistant' else '🧑'):

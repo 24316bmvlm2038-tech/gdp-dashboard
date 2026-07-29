@@ -28,6 +28,7 @@ import random
 from pathlib import Path
 
 from clode.tokenizer import ASSISTANT, END, USER
+from clode.vocabulary import english_words, letter_pairs, spelling_pairs
 
 # --------------------------------------------------------------------------
 # structured knowledge
@@ -615,6 +616,17 @@ def knowledge(rng: random.Random) -> list[tuple[str, str]]:
     return out
 
 
+def words(rng: random.Random) -> list[tuple[str, str]]:
+    """Spelling and alphabet facts over several thousand real English words.
+
+    This is what carries the vocabulary up: the words come from a frequency
+    list, and every statement about them is computed from the spelling, so
+    each one appears in a sentence that is true rather than merely plausible.
+    """
+    vocabulary = english_words(limit=VOCAB_WORDS)
+    return spelling_pairs(vocabulary, rng) + letter_pairs()
+
+
 def conversation(rng: random.Random) -> list[tuple[str, str]]:
     out = list(PERSONA) + list(REFUSALS) + list(SEARCH_GROUNDED) + list(UNIT_FACTS)
     for prompts, replies in SMALLTALK:
@@ -626,6 +638,16 @@ def conversation(rng: random.Random) -> list[tuple[str, str]]:
 # Associative recall (a country to its capital, an element to its symbol) is
 # what a model this small struggles with most, so those categories are drawn
 # more often than the ones it picks up quickly.
+# How many real English words to pull in from the frequency list. Every one
+# of them costs an embedding row, so this trades breadth of vocabulary against
+# how well the model learns what it already covers.
+VOCAB_WORDS = 4500
+
+# Associative recall (a country to its capital, an element to its symbol) is
+# what a model this small struggles with most, so those categories are drawn
+# more often than the ones it picks up quickly. Spelling data is deliberately
+# weighted low: it is there to ground a large vocabulary, not to dominate what
+# the model spends its capacity on.
 WEIGHTS = [
     (geography, 4),
     (knowledge, 3),
@@ -633,10 +655,11 @@ WEIGHTS = [
     (science, 2),
     (language_and_logic, 2),
     (conversation, 2),
+    (words, 1),
 ]
 
 
-def build(seed: int = 7, n_dialogues: int = 30000) -> str:
+def build(seed: int = 7, n_dialogues: int = 60000) -> str:
     """Return the full corpus text."""
     rng = random.Random(seed)
     pool: list[tuple[str, str]] = []
