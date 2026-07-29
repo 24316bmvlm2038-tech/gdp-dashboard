@@ -8,12 +8,16 @@ to learn the chat format, the persona, and the facts themselves.
 
 Every dialogue looks like:
 
-    <|user|> what is the capital of japan <|assistant|> The capital of Japan
+    <|user|> what is the capital of Japan <|assistant|> The capital of Japan
     is Tokyo. <|end|>
 
-Facts that need associative recall (country to capital, element to symbol)
-are the hardest thing for a model this small to learn, so ``WEIGHTS`` below
-oversamples those categories rather than relying on a uniform draw.
+Two things matter for a model this small. Facts needing associative recall
+(country to capital, element to symbol) are the hardest to learn, so
+``WEIGHTS`` below oversamples those categories. And names are written the
+same way in the question and the answer, so that answering is a copy the
+model can learn from attention rather than a second mapping it has to
+memorise per name — user input is matched to these forms case-insensitively
+by ``Tokenizer.lookup``.
 
 Run ``python -m clode.corpus`` to regenerate ``data/corpus.txt``.
 """
@@ -474,15 +478,23 @@ def _dialogue(turns: list[tuple[str, str]]) -> str:
 
 
 def geography(rng: random.Random) -> list[tuple[str, str]]:
+    """Capitals, languages, continents and currencies.
+
+    Questions name the country exactly as the answer does. When the question
+    said "japan" and the answer said "Japan" these were different tokens, so
+    the model could not simply carry the name across — it had to memorise a
+    lowercase-to-capitalised mapping per country, and instead collapsed to
+    answering with whichever capital was most frequent. Matching the surface
+    form turns that into a copy, which is the thing attention learns easily.
+    """
     out = []
     for country, capital in CAPITALS.items():
         for q in (f'what is the capital of {country}',
                   f'capital of {country}',
                   f'whats the capital city of {country}',
                   f'tell me the capital of {country}',
-                  f'which city is the capital of {country}'):
-            # Keep the country in most answers: the association is the thing
-            # this model finds hardest, so the corpus states it plainly.
+                  f'which city is the capital of {country}',
+                  f'what is the capital city of {country}'):
             out.append((q, rng.choice([
                 f'The capital of {country} is {capital}.',
                 f'The capital of {country} is {capital}.',
@@ -515,6 +527,7 @@ def science(rng: random.Random) -> list[tuple[str, str]]:
         out.append((f'what is the symbol for {name}', f'The symbol for {name} is {symbol}.'))
         out.append((f'what is the chemical symbol of {name}', f'It is {symbol}.'))
         out.append((f'what element is {symbol}', f'{symbol} is {name}.'))
+        out.append((f'which element has the symbol {symbol}', f'{symbol} is {name}.'))
         if number <= 20:
             out.append((f'what is the atomic number of {name}',
                         f'The atomic number of {name} is {number}.'))

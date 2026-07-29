@@ -69,8 +69,23 @@ class Tokenizer:
     def vocab_size(self) -> int:
         return len(self.itos)
 
+    def lookup(self, token: str) -> int:
+        """Token id, falling back across capitalisation before giving up.
+
+        The corpus writes proper nouns capitalised ("Japan"), but people type
+        "japan". Without this fallback those are unrelated tokens, and the
+        model has to learn a separate lowercase-to-capitalised association for
+        every name instead of simply copying the one it was given.
+        """
+        for candidate in (token, token.capitalize(), token.lower(), token.title(),
+                          token.upper()):
+            found = self.stoi.get(candidate)
+            if found is not None:
+                return found
+        return self.unk_id
+
     def encode(self, text: str) -> list[int]:
-        return [self.stoi.get(t, self.unk_id) for t in split(text)]
+        return [self.lookup(t) for t in split(text)]
 
     def decode(self, ids: list[int]) -> str:
         return self.join([self.itos[i] for i in ids if 0 <= i < len(self.itos)])
