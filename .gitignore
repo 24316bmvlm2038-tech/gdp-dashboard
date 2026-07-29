@@ -174,3 +174,10 @@ data/train.out
 # Clode web build outputs (regenerate with tools/export_web.py + tools/build_web.py)
 data/clode-web.json
 web/clode-mini.html
+
+# In-progress training checkpoints (the finished run is promoted to data/clode-mini.npz)
+data/checkpoints/
+
+# Intermediate warm-start snapshots (superseded by the released model)
+data/*stage*.npz
+data/*stage*.json

@@ -2,8 +2,11 @@
 
     python -m clode.train --steps 3000
 
-Checkpoints are written to ``data/clode-mini.npz`` every ``--save-every``
-steps, so the chat app can be tried out while training is still running.
+Checkpoints go to ``data/checkpoints/`` every ``--save-every`` steps, and the
+finished run is promoted to ``data/clode-mini.npz`` — the model the app and
+the web build load. Keeping the two apart means a long run does not rewrite
+the released weights every few minutes; pass ``--no-promote`` to leave them
+untouched, or ``--out`` to checkpoint somewhere else.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shutil
 import time
 from pathlib import Path
 
@@ -22,7 +26,8 @@ from clode.tokenizer import Tokenizer
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / 'data'
 CORPUS = DATA / 'corpus.txt'
-WEIGHTS = DATA / 'clode-mini.npz'
+WEIGHTS = DATA / 'clode-mini.npz'          # the released model the app loads
+CHECKPOINTS = DATA / 'checkpoints'         # in-progress checkpoints (not tracked)
 VOCAB = DATA / 'clode-vocab.json'
 LOG = DATA / 'training-log.json'
 
@@ -105,12 +110,22 @@ def main() -> None:
     ap.add_argument('--eval-every', type=int, default=100)
     ap.add_argument('--save-every', type=int, default=200)
     ap.add_argument('--max-vocab', type=int, default=4096)
+    ap.add_argument('--out', type=str, default=None,
+                    help='where to write checkpoints during the run '
+                         '(default: data/checkpoints/clode-training.npz)')
+    ap.add_argument('--no-promote', action='store_true',
+                    help='leave the released model alone when the run finishes')
     ap.add_argument('--resume', action='store_true')
     ap.add_argument('--warm-start', type=str, default=None,
                     help='checkpoint to carry into the new vocabulary')
     ap.add_argument('--warm-vocab', type=str, default=None,
                     help='vocabulary that checkpoint was trained with')
     args = ap.parse_args()
+
+    CHECKPOINTS.mkdir(parents=True, exist_ok=True)
+    # Training writes here, not over the model the app is serving: a long run
+    # would otherwise rewrite the released weights every few minutes.
+    out = Path(args.out) if args.out else CHECKPOINTS / 'clode-training.npz'
 
     text = CORPUS.read_text(encoding='utf-8')
     if VOCAB.exists() and args.resume:
@@ -158,11 +173,16 @@ def main() -> None:
             LOG.write_text(json.dumps(history, indent=1), encoding='utf-8')
 
         if step and step % args.save_every == 0:
-            model.save(WEIGHTS)
+            model.save(out)
 
-    model.save(WEIGHTS)
-    print(f'\nsaved {WEIGHTS} after {(time.time() - started) / 60:.1f} min '
+    model.save(out)
+    print(f'\nsaved {out} after {(time.time() - started) / 60:.1f} min '
           f'(best val {best_val:.3f})')
+    if not args.no_promote:
+        # The finished run becomes the released model in one step, so the
+        # tracked file changes once per run rather than once per checkpoint.
+        shutil.copyfile(out, WEIGHTS)
+        print(f'promoted to {WEIGHTS}')
     for prompt in ['who are you', 'what is the capital of japan', 'what is 12 + 30',
                    'how do i reverse a list in python', 'hello']:
         print(f'\n> {prompt}\n{sample(model, tok, prompt)}')
