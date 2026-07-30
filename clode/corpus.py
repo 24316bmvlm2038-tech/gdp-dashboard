@@ -643,29 +643,54 @@ def conversation(rng: random.Random) -> list[tuple[str, str]]:
 # how well the model learns what it already covers.
 VOCAB_WORDS = 6000
 
-# Associative recall (a country to its capital, an element to its symbol) is
-# what a model this small struggles with most, so those categories are drawn
-# more often than the ones it picks up quickly. Spelling data is deliberately
-# weighted low: it is there to ground a large vocabulary, not to dominate what
-# the model spends its capacity on.
-WEIGHTS = [
-    (geography, 4),
-    (knowledge, 3),
-    (arithmetic, 2),
-    (science, 2),
-    (language_and_logic, 2),
-    (conversation, 2),
-    (words, 1),
-]
+# Share of the training pool each category gets.
+#
+# These are shares, not multipliers, because multipliers were actively
+# misleading here: the spelling generator produces ~59,000 pairs from 6,000
+# words, so at "weight 1" it was 88% of the pool while geography at "weight 4"
+# was 4%. The model spent almost all of its capacity on spelling and forgot how
+# to answer questions. Stating the mix as fractions makes that visible, and
+# keeps knowledge dominant while still grounding a large vocabulary.
+SHARES = {
+    'geography': 0.24,
+    'knowledge': 0.18,
+    'arithmetic': 0.16,
+    'conversation': 0.10,
+    'science': 0.06,
+    'language_and_logic': 0.06,
+    'words': 0.20,
+}
+
+GENERATORS = {
+    'geography': geography,
+    'knowledge': knowledge,
+    'arithmetic': arithmetic,
+    'science': science,
+    'language_and_logic': language_and_logic,
+    'conversation': conversation,
+    'words': words,
+}
 
 
-def build(seed: int = 7, n_dialogues: int = 95000) -> str:
-    """Return the full corpus text."""
+def build(seed: int = 7, n_dialogues: int = 95000, pool_size: int = 120000) -> str:
+    """Return the full corpus text.
+
+    The pool is filled to the shares in ``SHARES`` — sampling with replacement
+    where a category has fewer pairs than its share, which is exactly the
+    repetition a small model needs to memorise a fact.
+    """
     rng = random.Random(seed)
     pool: list[tuple[str, str]] = []
-    for fn, weight in WEIGHTS:
-        pairs = fn(rng)
-        pool.extend(pairs * weight)
+    for name, share in SHARES.items():
+        pairs = GENERATORS[name](rng)
+        if not pairs:
+            continue
+        wanted = max(1, int(pool_size * share))
+        if wanted <= len(pairs):
+            pool.extend(rng.sample(pairs, wanted))
+        else:
+            pool.extend(pairs)
+            pool.extend(rng.choices(pairs, k=wanted - len(pairs)))
     rng.shuffle(pool)
 
     lines: list[str] = []
