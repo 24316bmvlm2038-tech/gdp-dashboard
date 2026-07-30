@@ -29,7 +29,7 @@ CORPUS = DATA / 'corpus.txt'
 WEIGHTS = DATA / 'clode-mini.npz'          # the released model the app loads
 CHECKPOINTS = DATA / 'checkpoints'         # in-progress checkpoints (not tracked)
 VOCAB = DATA / 'clode-vocab.json'
-LOG = DATA / 'training-log.json'
+LOG = DATA / 'training-log.json'            # the published curve, written at the end
 
 
 def get_batch(tokens: np.ndarray, batch_size: int, n_ctx: int, rng: np.random.Generator):
@@ -130,6 +130,10 @@ def main() -> None:
     # vocabulary are meaningless with another, so they are written together
     # and promoted together.
     out_vocab = out.with_name(out.stem + '-vocab.json')
+    # The live log is a running-run artifact: writing it straight to the
+    # tracked path left the working tree dirty every hundred steps for hours.
+    # It is copied to LOG when the run finishes.
+    out_log = out.with_name(out.stem + '-log.json')
 
     text = CORPUS.read_text(encoding='utf-8')
     if out_vocab.exists() and args.resume:
@@ -181,12 +185,14 @@ def main() -> None:
                   f'| {elapsed / 60:.1f} min', flush=True)
             history.append({'step': step, 'train_loss': loss, 'val_loss': val,
                             'lr': lr, 'elapsed_s': round(elapsed, 1)})
-            LOG.write_text(json.dumps(history, indent=1), encoding='utf-8')
+            out_log.write_text(json.dumps(history, indent=1), encoding='utf-8')
 
         if step and step % args.save_every == 0:
             model.save(out)
 
     model.save(out)
+    if history:
+        LOG.write_text(json.dumps(history, indent=1), encoding='utf-8')
     print(f'\nsaved {out} after {(time.time() - started) / 60:.1f} min '
           f'(best val {best_val:.3f})')
     if not args.no_promote:
