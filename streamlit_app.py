@@ -7,7 +7,7 @@ import streamlit as st
 from curiosity import auth, engine
 from curiosity.models import CATEGORIES, now_iso
 from curiosity.store import db, notify, save, users
-from curiosity.theme import init_theme
+from curiosity.theme import inject
 from curiosity.ui import auth_view, onboarding
 from curiosity.ui import (assistant, collections_view, daily, explore, feed,
                           social)
@@ -20,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state='collapsed',
 )
 
-init_theme()
+inject()
 
 user = auth.current_user()
 
