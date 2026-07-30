@@ -27,14 +27,24 @@ history science music paper street summer winter number reason answer question
 """.split()
 
 
-def english_words(limit: int = 6000, min_length: int = 3) -> list[str]:
-    """Most frequent English words, longest-tail first filtered for sanity."""
+def english_words(limit: int = 6000, min_length: int = 3,
+                  exclude: set[str] | None = None) -> list[str]:
+    """Most frequent English words, filtered for sanity and for collisions.
+
+    ``exclude`` holds lowercased names the knowledge data depends on — country
+    names, capitals, elements. They must be left out, because adding a
+    lowercase "japan" for spelling drills makes it an exact vocabulary entry,
+    and ``Tokenizer.lookup`` then stops falling back to the capitalised
+    "Japan" that the geography answers were built around. The model keeps the
+    facts and loses the ability to be asked about them in lowercase.
+    """
     try:
         from wordfreq import top_n_list
         candidates = top_n_list('en', limit * 2)
     except ImportError:
         candidates = FALLBACK_WORDS
 
+    blocked = {w.lower() for w in (exclude or set())}
     words = []
     seen = set()
     for word in candidates:
@@ -43,7 +53,7 @@ def english_words(limit: int = 6000, min_length: int = 3) -> list[str]:
         if len(word) < min_length or len(word) > 12:
             continue
         lower = word.lower()
-        if lower in seen:
+        if lower in seen or lower in blocked:
             continue
         seen.add(lower)
         words.append(lower)

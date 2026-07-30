@@ -616,6 +616,27 @@ def knowledge(rng: random.Random) -> list[tuple[str, str]]:
     return out
 
 
+def reserved_names() -> set[str]:
+    """Every name the knowledge answers depend on being capitalised.
+
+    These are kept out of the spelling vocabulary so that a lowercase question
+    ("capital of japan") still resolves to the capitalised token the geography
+    data uses.
+    """
+    names: set[str] = set()
+    for table in (CAPITALS, LANGUAGES, CONTINENTS, CURRENCIES):
+        for key, value in table.items():
+            names.update(key.split())
+            names.update(str(value).split())
+    names.update(PLANETS)
+    for element, (symbol, _) in ELEMENTS.items():
+        names.add(element)
+        names.add(symbol)
+    for phrase in SUPERLATIVES.values():
+        names.update(w.strip('.,') for w in phrase.split() if w[:1].isupper())
+    return {n.lower().strip('.,') for n in names if n}
+
+
 def words(rng: random.Random) -> list[tuple[str, str]]:
     """Spelling and alphabet facts over several thousand real English words.
 
@@ -623,7 +644,7 @@ def words(rng: random.Random) -> list[tuple[str, str]]:
     list, and every statement about them is computed from the spelling, so
     each one appears in a sentence that is true rather than merely plausible.
     """
-    vocabulary = english_words(limit=VOCAB_WORDS)
+    vocabulary = english_words(limit=VOCAB_WORDS, exclude=reserved_names())
     return spelling_pairs(vocabulary, rng) + letter_pairs()
 
 
