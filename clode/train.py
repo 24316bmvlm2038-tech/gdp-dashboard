@@ -153,6 +153,13 @@ def main() -> None:
         model = Clode(cfg)
     print(f'parameters: {model.n_params:,}')
 
+    # Write the checkpoint immediately, so the weights and the vocabulary on
+    # disk always describe the same model. Otherwise anything reading the
+    # checkpoint before the first save interval pairs this run's vocabulary
+    # with the previous run's weights, and mismatched ids generate confident
+    # nonsense instead of raising.
+    model.save(out)
+
     opt = Adam(model.params, lr=args.lr, weight_decay=0.01)
     rng = np.random.default_rng(0)
     history: list[dict] = []

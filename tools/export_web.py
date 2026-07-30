@@ -20,8 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from clode.model import Clode
-from clode.tokenizer import Tokenizer
+from clode.checkpoint import load_pair
 
 ROOT = Path(__file__).resolve().parents[1]
 WEIGHTS = ROOT / 'data' / 'clode-mini.npz'
@@ -38,8 +37,7 @@ def quantize(w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def main() -> None:
-    model = Clode.load(WEIGHTS)
-    tok = Tokenizer.load(VOCAB)
+    model, tok = load_pair(WEIGHTS, VOCAB)
 
     chunks: list[bytes] = []
     manifest: list[dict] = []

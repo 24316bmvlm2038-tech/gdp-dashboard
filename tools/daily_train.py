@@ -43,12 +43,10 @@ def run(*args: str) -> None:
 
 def score(weights: Path, vocab: Path) -> tuple[int, int]:
     """Held-out accuracy of a checkpoint, as (correct, total)."""
+    from clode.checkpoint import load_pair
     from clode.evaluate import CASES, answer
-    from clode.model import Clode
-    from clode.tokenizer import Tokenizer
 
-    model = Clode.load(weights)
-    tok = Tokenizer.load(vocab)
+    model, tok = load_pair(weights, vocab)
     correct = 0
     for _, question, accepted in CASES:
         reply = answer(model, tok, question)

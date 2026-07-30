@@ -7,10 +7,12 @@ still "work" (the loss would just fall slower or plateau) — this is what
 catches it.
 """
 
+import json
 import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -202,3 +204,29 @@ def test_unknown_words_map_to_unk():
     tok = Tokenizer.train('hello world hello world', min_count=1)
     ids = tok.encode('hello zzzz')
     assert ids[1] == tok.unk_id
+
+
+def test_mismatched_checkpoint_and_vocabulary_is_refused(tmp_path):
+    """A checkpoint and a vocabulary of different sizes must not load.
+
+    They generate fluent nonsense rather than raising, which reads like a
+    training failure and sends you debugging the wrong thing.
+    """
+    from clode.checkpoint import CheckpointMismatch, load_pair
+
+    model = Clode(Config(vocab_size=17, n_ctx=8, n_embd=16, n_head=2, n_layer=2))
+    weights = tmp_path / 'm.npz'
+    model.save(weights)
+
+    good = tmp_path / 'good.json'
+    good.write_text(json.dumps(['<|pad|>', '<|unk|>', '<|user|>', '<|assistant|>',
+                                '<|end|>'] + [f'w{i}' for i in range(12)]))
+    loaded, tok = load_pair(weights, good)
+    assert tok.vocab_size == loaded.cfg.vocab_size == 17
+
+    bad = tmp_path / 'bad.json'
+    bad.write_text(json.dumps(['<|pad|>', '<|unk|>', '<|user|>', '<|assistant|>',
+                               '<|end|>'] + [f'w{i}' for i in range(40)]))
+    with pytest.raises(CheckpointMismatch) as exc:
+        load_pair(weights, bad)
+    assert '17' in str(exc.value) and '45' in str(exc.value)

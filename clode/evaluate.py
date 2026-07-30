@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from clode.checkpoint import load_pair
 from clode.model import Clode
 from clode.tokenizer import Tokenizer
 
@@ -86,8 +87,7 @@ def main() -> None:
     ap.add_argument('--show', action='store_true', help='print every answer')
     args = ap.parse_args()
 
-    model = Clode.load(args.weights)
-    tok = Tokenizer.load(args.vocab)
+    model, tok = load_pair(args.weights, args.vocab)
     print(f'{model.n_params:,} parameters | vocab {tok.vocab_size}\n')
 
     hits: dict[str, int] = defaultdict(int)

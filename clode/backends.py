@@ -109,12 +109,10 @@ class LocalBackend:
     def __init__(self, weights: Path = WEIGHTS, vocab: Path = VOCAB):
         import numpy as np
 
-        from clode.model import Clode
-        from clode.tokenizer import Tokenizer
+        from clode.checkpoint import load_pair
 
         self._np = np
-        self.model = Clode.load(weights)
-        self.tok = Tokenizer.load(vocab)
+        self.model, self.tok = load_pair(weights, vocab)
 
     @staticmethod
     def available(weights: Path = WEIGHTS, vocab: Path = VOCAB) -> bool:
