@@ -641,7 +641,7 @@ def conversation(rng: random.Random) -> list[tuple[str, str]]:
 # How many real English words to pull in from the frequency list. Every one
 # of them costs an embedding row, so this trades breadth of vocabulary against
 # how well the model learns what it already covers.
-VOCAB_WORDS = 4500
+VOCAB_WORDS = 6000
 
 # Associative recall (a country to its capital, an element to its symbol) is
 # what a model this small struggles with most, so those categories are drawn
@@ -659,7 +659,7 @@ WEIGHTS = [
 ]
 
 
-def build(seed: int = 7, n_dialogues: int = 60000) -> str:
+def build(seed: int = 7, n_dialogues: int = 95000) -> str:
     """Return the full corpus text."""
     rng = random.Random(seed)
     pool: list[tuple[str, str]] = []
