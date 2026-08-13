@@ -28,6 +28,7 @@ import random
 from pathlib import Path
 
 from clode.tokenizer import ASSISTANT, END, USER
+from clode.harvest import as_pairs, load_database
 from clode.vocabulary import english_words, letter_pairs, spelling_pairs
 
 # --------------------------------------------------------------------------
@@ -648,6 +649,18 @@ def words(rng: random.Random) -> list[tuple[str, str]]:
     return spelling_pairs(vocabulary, rng) + letter_pairs()
 
 
+def harvested(rng: random.Random) -> list[tuple[str, str]]:
+    """Facts collected from the web by ``tools.harvest_loop``.
+
+    Empty until something has been harvested, and deliberately given a small
+    share: these are the only pairs in the corpus that were not derived from a
+    table or computed, so they are the only ones that can be wrong. Their share
+    stays small enough that a bad harvest cannot swamp what the model knows,
+    and tools/daily_train.py refuses to publish a model that scores worse.
+    """
+    return as_pairs(load_database())
+
+
 def conversation(rng: random.Random) -> list[tuple[str, str]]:
     out = list(PERSONA) + list(REFUSALS) + list(SEARCH_GROUNDED) + list(UNIT_FACTS)
     for prompts, replies in SMALLTALK:
@@ -673,16 +686,18 @@ VOCAB_WORDS = 6000
 # to answer questions. Stating the mix as fractions makes that visible, and
 # keeps knowledge dominant while still grounding a large vocabulary.
 SHARES = {
-    'geography': 0.24,
+    'harvested': 0.04,
+    'geography': 0.22,
     'knowledge': 0.18,
     'arithmetic': 0.16,
     'conversation': 0.10,
     'science': 0.06,
     'language_and_logic': 0.06,
-    'words': 0.20,
+    'words': 0.18,
 }
 
 GENERATORS = {
+    'harvested': harvested,
     'geography': geography,
     'knowledge': knowledge,
     'arithmetic': arithmetic,
