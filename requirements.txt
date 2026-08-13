@@ -1,2 +1,5 @@
 streamlit
-pillow
+numpy
+# Optional: only needed for the Claude API backend. The locally trained
+# model runs on numpy alone.
+anthropic

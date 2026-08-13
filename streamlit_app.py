@@ -1,458 +1,356 @@
-"""PhotoShare — a photo sharing gallery app.
+"""Clode — a Claude-style chat assistant.
 
-Two areas:
-  * Community Feed: browse photos people publish online. Like, dislike,
-    comment on photos and follow/unfollow their authors.
-  * My Gallery (private): upload and view all of your own photos. Like,
-    mark, keep, remove and publish them — every action is persisted, so
-    your gallery really changes.
+The UI is a chat client with saved conversations. Behind it sit two backends
+(see ``clode/backends.py``):
 
-All state is stored in ``data/photoshare.json`` and uploaded images in
-``data/uploads/`` so everything survives reloads and restarts.
+* the real Claude API, when ``ANTHROPIC_API_KEY`` is configured;
+* otherwise ``Clode-mini``, a ~3.5M parameter transformer written from scratch
+  in NumPy (``clode/model.py``) and trained on this machine by ``clode.train``.
+
+Conversations persist to ``data/chats.json``.
 """
 
+from __future__ import annotations
+
 import json
-import math
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
-from PIL import Image, ImageDraw
 
-st.set_page_config(
-    page_title='PhotoShare',
-    page_icon='📸',
-    layout='wide',
+from clode import search as websearch
+from clode.backends import (
+    API_MODELS,
+    DEFAULT_SYSTEM,
+    AnthropicBackend,
+    LocalBackend,
+    Message,
+    describe_status,
 )
 
+st.set_page_config(page_title='Clode', page_icon='✳️', layout='wide')
+
 DATA_DIR = Path(__file__).parent / 'data'
-UPLOAD_DIR = DATA_DIR / 'uploads'
-DEMO_DIR = DATA_DIR / 'demo'
-STORE_FILE = DATA_DIR / 'photoshare.json'
+CHATS_FILE = DATA_DIR / 'chats.json'
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-DEMO_DIR.mkdir(parents=True, exist_ok=True)
+STYLE = """
+<style>
+  :root { --clode-accent: #d97757; --clode-ink: #1f1e1c; }
+  .stApp { background: #faf9f5; }
+  section[data-testid='stSidebar'] { background: #f0eee6; border-right: 1px solid #e5e1d6; }
+  .block-container { padding-top: 2.2rem; max-width: 52rem; }
+  .clode-title {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 2.4rem; color: var(--clode-ink); margin: 0 0 .2rem 0;
+  }
+  .clode-title span { color: var(--clode-accent); }
+  .clode-sub { color: #6b6862; margin-bottom: 1.6rem; font-size: .95rem; }
+  .stChatMessage { background: transparent; border: none; }
+  .stChatMessage[data-testid='stChatMessage']:has(+ div) { margin-bottom: .2rem; }
+  div[data-testid='stChatMessageContent'] p { line-height: 1.65; }
+  .clode-pill {
+    display: inline-block; padding: .18rem .55rem; border-radius: 999px;
+    font-size: .72rem; border: 1px solid #ded9cc; background: #fff; color: #6b6862;
+  }
+  .clode-pill.on { border-color: var(--clode-accent); color: var(--clode-accent); }
+  .searchline { font-size: .88rem; padding-top: .55rem; color: #6b6862; }
+  .searchline.on { color: var(--clode-accent); }
+  .searchline b { color: inherit; }
+  .rule { border-top: 1px solid #e5e1d6; margin: .35rem 0 .9rem; }
+  .src { font-size: .8rem; opacity: .6; }
+  @media (prefers-color-scheme: dark) {
+    .searchline { color: #a8a49b; }
+    .rule { border-top-color: #35342f; }
+  }
+  @media (prefers-color-scheme: dark) {
+    .stApp { background: #262624; }
+    section[data-testid='stSidebar'] { background: #1f1e1d; border-right-color: #35342f; }
+    .clode-title { color: #f5f4ee; }
+    .clode-sub { color: #a8a49b; }
+    .clode-pill { background: #2c2b28; border-color: #3d3b35; color: #a8a49b; }
+  }
+</style>
+"""
+st.markdown(STYLE, unsafe_allow_html=True)
 
-ME = 'you'
+
+# --------------------------------------------------------------------------
+# persistence
+# --------------------------------------------------------------------------
+
+def load_chats() -> dict:
+    if CHATS_FILE.exists():
+        try:
+            return json.loads(CHATS_FILE.read_text(encoding='utf-8'))
+        except json.JSONDecodeError:
+            pass
+    return {'chats': {}, 'order': []}
 
 
-def _make_demo_image(path, top, bottom, accent):
-    """Draw a small scenic placeholder (gradient sky, sun, hills) locally,
-    so the demo feed never depends on an internet image service."""
-    w, h = 720, 480
-    img = Image.new('RGB', (w, h))
-    draw = ImageDraw.Draw(img)
-    for y in range(h):
-        t = y / (h - 1)
-        color = tuple(round(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
-        draw.line([(0, y), (w, y)], fill=color)
-    # sun / moon
-    sun = tuple(min(255, c + 70) for c in accent)
-    draw.ellipse([w * 0.68, h * 0.14, w * 0.68 + 90, h * 0.14 + 90], fill=sun)
-    # rolling hills
-    for layer, (amp, base) in enumerate([(40, 0.68), (55, 0.8), (70, 0.92)]):
-        shade = tuple(max(0, round(c * (0.85 - 0.22 * layer))) for c in accent)
-        points = [(x, h * base + amp * math.sin(x / 90 + layer * 2))
-                  for x in range(0, w + 1, 8)]
-        draw.polygon(points + [(w, h), (0, h)], fill=shade)
-    img.save(path, 'JPEG', quality=88)
+def save_chats(store: dict) -> None:
+    CHATS_FILE.write_text(json.dumps(store, indent=1), encoding='utf-8')
 
 
-# -----------------------------------------------------------------------------
-# Persistence
-
-def _seed_store():
-    """Initial data: a few demo people who already published photos online."""
-
-    palettes = [
-        ((255, 183, 94), (255, 94, 98), (120, 60, 90)),    # sunset
-        ((160, 196, 255), (222, 235, 255), (70, 110, 140)),  # misty morning
-        ((60, 70, 120), (20, 24, 50), (90, 80, 140)),      # night
-        ((190, 230, 195), (245, 250, 220), (60, 130, 90)),  # spring
-        ((250, 214, 165), (240, 150, 120), (150, 100, 70)),  # desert
-        ((140, 200, 220), (230, 245, 250), (60, 120, 150)),  # lake
-        ((255, 210, 130), (180, 120, 160), (110, 70, 110)),  # dusk
-        ((205, 220, 240), (150, 170, 200), (80, 100, 130)),  # overcast
-    ]
-    seeded = iter(palettes)
-
-    def feed_photo(author, caption, likes, dislikes, comments):
-        photo_id = uuid.uuid4().hex
-        filename = f'demo/{photo_id}.jpg'
-        top, bottom, accent = next(seeded)
-        _make_demo_image(DATA_DIR / filename, top, bottom, accent)
-        return {
-            'id': photo_id,
-            'author': author,
-            'file': filename,         # path relative to data/
-            'caption': caption,
-            'likes': likes,
-            'dislikes': dislikes,
-            'my_vote': None,          # None | 'like' | 'dislike'
-            'comments': comments,     # [{author, text, time}]
-            'posted_at': datetime.now().isoformat(timespec='seconds'),
-        }
-
-    def comment(author, text):
-        return {'author': author, 'text': text,
-                'time': datetime.now().isoformat(timespec='seconds')}
-
-    return {
-        'users': {
-            'ava_shoots': {'name': 'Ava Torres', 'bio': 'Landscapes & light chasing'},
-            'liam.frames': {'name': 'Liam Chen', 'bio': 'Street photography, mostly rain'},
-            'maya_lens': {'name': 'Maya Okafor', 'bio': 'Food, travel and tiny details'},
-            'noah_wild': {'name': 'Noah Berg', 'bio': 'Wildlife and the great outdoors'},
-        },
-        'following': [],
-        'my_photos': [],   # photos in your private gallery
-        'feed_photos': [
-            feed_photo('ava_shoots', 'River bend at golden hour', 42, 1,
-                       [comment('liam.frames', 'That light is unreal!')]),
-            feed_photo('ava_shoots', 'Fog rolling over the ridge', 31, 0, []),
-            feed_photo('liam.frames', 'Quiet night in the city', 27, 2,
-                       [comment('maya_lens', 'So peaceful 😍'),
-                        comment('noah_wild', 'Where is this?')]),
-            feed_photo('liam.frames', 'First green of spring', 18, 3, []),
-            feed_photo('maya_lens', 'Dunes going on forever', 55, 2,
-                       [comment('ava_shoots', 'The composition here!')]),
-            feed_photo('maya_lens', 'Morning at the lake', 23, 0, []),
-            feed_photo('noah_wild', 'Dusk over the valley', 68, 1,
-                       [comment('ava_shoots', 'Incredible shot'),
-                        comment('liam.frames', 'Worth the wait I bet')]),
-            feed_photo('noah_wild', 'Storm rolling in', 39, 0, []),
-        ],
+def new_chat(store: dict) -> str:
+    chat_id = uuid.uuid4().hex[:12]
+    store['chats'][chat_id] = {
+        'title': 'New chat',
+        'created': datetime.now().isoformat(timespec='seconds'),
+        'messages': [],
     }
+    store['order'].insert(0, chat_id)
+    return chat_id
 
 
-def load_store():
-    if 'store' not in st.session_state:
-        if STORE_FILE.exists():
-            st.session_state.store = json.loads(STORE_FILE.read_text())
-        else:
-            st.session_state.store = _seed_store()
-            save_store()
-    return st.session_state.store
+def title_from(text: str) -> str:
+    clean = ' '.join(text.split())
+    return clean[:38] + ('…' if len(clean) > 38 else '')
 
 
-def save_store():
-    STORE_FILE.write_text(json.dumps(st.session_state.store, indent=2))
+if 'store' not in st.session_state:
+    st.session_state.store = load_chats()
+store = st.session_state.store
+
+if not store['order']:
+    st.session_state.current = new_chat(store)
+    save_chats(store)
+if 'current' not in st.session_state or st.session_state.current not in store['chats']:
+    st.session_state.current = store['order'][0]
 
 
-store = load_store()
+# --------------------------------------------------------------------------
+# backend selection
+# --------------------------------------------------------------------------
+
+@st.cache_resource(show_spinner=False)
+def get_local_backend(mtime: float):
+    """Cached on the weights' mtime so a fresh checkpoint is picked up."""
+    return LocalBackend()
 
 
-# -----------------------------------------------------------------------------
-# Actions (each mutates the store and saves it, so changes are permanent)
-
-def toggle_follow(username):
-    if username in store['following']:
-        store['following'].remove(username)
-    else:
-        store['following'].append(username)
-    save_store()
-
-
-def vote_feed(photo, vote):
-    """Like/dislike a feed photo. Voting again withdraws it, switching swaps it."""
-    prev = photo['my_vote']
-    if prev == 'like':
-        photo['likes'] -= 1
-    elif prev == 'dislike':
-        photo['dislikes'] -= 1
-    if prev == vote:
-        photo['my_vote'] = None
-    else:
-        photo['my_vote'] = vote
-        photo['likes' if vote == 'like' else 'dislikes'] += 1
-    save_store()
-
-
-def add_comment(photo, key):
-    text = st.session_state.get(key, '').strip()
-    if text:
-        photo['comments'].append({
-            'author': ME,
-            'text': text,
-            'time': datetime.now().isoformat(timespec='seconds'),
-        })
-        st.session_state[key] = ''
-        save_store()
-
-
-def add_my_photos(files, caption):
-    for f in files:
-        ext = Path(f.name).suffix.lower() or '.jpg'
-        photo_id = uuid.uuid4().hex
-        (UPLOAD_DIR / f'{photo_id}{ext}').write_bytes(f.getbuffer())
-        store['my_photos'].append({
-            'id': photo_id,
-            'file': f'uploads/{photo_id}{ext}',
-            'title': caption.strip() or Path(f.name).stem,
-            'liked': False,
-            'marked': False,
-            'kept': False,
-            'published': False,
-            'uploaded_at': datetime.now().isoformat(timespec='seconds'),
-        })
-    save_store()
-
-
-def toggle_my(photo, flag):
-    photo[flag] = not photo[flag]
-    save_store()
-
-
-def remove_my(photo):
-    path = DATA_DIR / photo['file']
-    if path.exists():
-        path.unlink()
-    store['my_photos'] = [p for p in store['my_photos'] if p['id'] != photo['id']]
-    # Also take it off the public feed if it was published there.
-    store['feed_photos'] = [p for p in store['feed_photos']
-                            if p.get('gallery_id') != photo['id']]
-    save_store()
-
-
-def toggle_publish(photo):
-    if photo['published']:
-        store['feed_photos'] = [p for p in store['feed_photos']
-                                if p.get('gallery_id') != photo['id']]
-        photo['published'] = False
-    else:
-        store['feed_photos'].insert(0, {
-            'id': uuid.uuid4().hex,
-            'gallery_id': photo['id'],
-            'author': ME,
-            'file': photo['file'],
-            'caption': photo['title'],
-            'likes': 0,
-            'dislikes': 0,
-            'my_vote': None,
-            'comments': [],
-            'posted_at': datetime.now().isoformat(timespec='seconds'),
-        })
-        photo['published'] = True
-    save_store()
-
-
-# -----------------------------------------------------------------------------
-# UI helpers
-
-def show_photo(photo):
-    """Render a feed or gallery photo image from the data directory."""
-    path = DATA_DIR / photo['file']
-    if path.exists():
-        st.image(str(path), use_container_width=True)
-    else:
-        st.caption('_(image file missing)_')
-
-
-def author_label(username):
-    if username == ME:
-        return 'You'
-    user = store['users'].get(username)
-    return f"{user['name']} (@{username})" if user else f'@{username}'
-
-
-# -----------------------------------------------------------------------------
-# Pages
-
-def community_feed():
-    st.title('📸 Community Feed')
-    st.caption('Photos people published online. Like, dislike, comment and follow.')
-
-    only_following = st.toggle(
-        f'Only people I follow ({len(store["following"])})',
-        value=False,
-    )
-
-    photos = store['feed_photos']
-    if only_following:
-        photos = [p for p in photos if p['author'] in store['following']]
-        if not photos:
-            st.info('You are not following anyone yet — or the people you follow '
-                    'have not published photos. Turn the toggle off to browse everyone.')
-            return
-
-    for photo in photos:
-        with st.container(border=True):
-            img_col, side_col = st.columns([2, 1])
-
-            with img_col:
-                show_photo(photo)
-
-            with side_col:
-                st.subheader(photo['caption'])
-                st.write(f"by **{author_label(photo['author'])}**")
-
-                if photo['author'] != ME:
-                    following = photo['author'] in store['following']
-                    st.button(
-                        '✓ Following' if following else '➕ Follow',
-                        key=f"follow_{photo['id']}",
-                        type='secondary' if following else 'primary',
-                        on_click=toggle_follow, args=(photo['author'],),
-                    )
-
-                like_col, dislike_col = st.columns(2)
-                liked = photo['my_vote'] == 'like'
-                disliked = photo['my_vote'] == 'dislike'
-                like_col.button(
-                    f"{'❤️' if liked else '🤍'} {photo['likes']}",
-                    key=f"like_{photo['id']}",
-                    help='Like this photo',
-                    on_click=vote_feed, args=(photo, 'like'),
-                )
-                dislike_col.button(
-                    f"{'👎' if disliked else '💔'} {photo['dislikes']}",
-                    key=f"dislike_{photo['id']}",
-                    help='Dislike this photo',
-                    on_click=vote_feed, args=(photo, 'dislike'),
-                )
-
-                with st.expander(f"💬 Comments ({len(photo['comments'])})"):
-                    for c in photo['comments']:
-                        st.markdown(f"**{author_label(c['author'])}**: {c['text']}")
-                    comment_key = f"comment_{photo['id']}"
-                    st.text_input('Add a comment', key=comment_key,
-                                  placeholder='Say something nice…',
-                                  label_visibility='collapsed')
-                    st.button('Post', key=f"post_{photo['id']}",
-                              on_click=add_comment, args=(photo, comment_key))
-
-
-def my_gallery():
-    st.title('🖼️ My Gallery')
-    st.caption('Your private space. Only photos you publish appear in the feed.')
-
-    # --- Upload -------------------------------------------------------------
-    with st.expander('⬆️ Add photos to your gallery', expanded=not store['my_photos']):
-        uploader_key = f"uploader_{st.session_state.get('uploader_round', 0)}"
-        files = st.file_uploader(
-            'Choose images', type=['png', 'jpg', 'jpeg', 'gif', 'webp'],
-            accept_multiple_files=True, key=uploader_key,
-        )
-        caption = st.text_input('Title (optional, applies to this upload)')
-        if st.button('Add to gallery', type='primary', disabled=not files):
-            add_my_photos(files, caption)
-            # Change the uploader key so the same files aren't re-added on rerun.
-            st.session_state['uploader_round'] = st.session_state.get('uploader_round', 0) + 1
-            st.rerun()
-
-    if not store['my_photos']:
-        st.info('Your gallery is empty — upload your first photos above.')
-        return
-
-    # --- Filters ------------------------------------------------------------
-    view = st.radio(
-        'Show', ['All', '❤️ Liked', '🔖 Marked', '📌 Kept', '🌍 Published'],
-        horizontal=True, label_visibility='collapsed',
-    )
-    photos = store['my_photos']
-    if view == '❤️ Liked':
-        photos = [p for p in photos if p['liked']]
-    elif view == '🔖 Marked':
-        photos = [p for p in photos if p['marked']]
-    elif view == '📌 Kept':
-        photos = [p for p in photos if p['kept']]
-    elif view == '🌍 Published':
-        photos = [p for p in photos if p['published']]
-
-    st.caption(f'{len(photos)} photo(s)')
-    if not photos:
-        st.info('No photos match this filter.')
-        return
-
-    # --- Grid ---------------------------------------------------------------
-    cols = st.columns(3)
-    for i, photo in enumerate(photos):
-        with cols[i % 3].container(border=True):
-            show_photo(photo)
-
-            badges = []
-            if photo['liked']:
-                badges.append('❤️ Liked')
-            if photo['marked']:
-                badges.append('🔖 Marked')
-            if photo['kept']:
-                badges.append('📌 Kept')
-            if photo['published']:
-                badges.append('🌍 Published')
-            st.markdown(f"**{photo['title']}**" + ('  \n' + ' · '.join(badges) if badges else ''))
-
-            action_cols = st.columns(4)
-            action_cols[0].button(
-                '❤️' if photo['liked'] else '🤍',
-                key=f"mylike_{photo['id']}", help='Like',
-                on_click=toggle_my, args=(photo, 'liked'),
-            )
-            action_cols[1].button(
-                '🔖' if photo['marked'] else '🏷️',
-                key=f"mymark_{photo['id']}", help='Mark',
-                on_click=toggle_my, args=(photo, 'marked'),
-            )
-            action_cols[2].button(
-                '📌' if photo['kept'] else '📍',
-                key=f"mykeep_{photo['id']}",
-                help='Keep — protects the photo from removal',
-                on_click=toggle_my, args=(photo, 'kept'),
-            )
-            action_cols[3].button(
-                '🗑️', key=f"myremove_{photo['id']}",
-                help='Photo is kept — un-keep it first to remove'
-                     if photo['kept'] else 'Remove from gallery',
-                disabled=photo['kept'],
-                on_click=remove_my, args=(photo,),
-            )
-
-            st.button(
-                '🚫 Unpublish' if photo['published'] else '🌍 Publish online',
-                key=f"mypublish_{photo['id']}",
-                type='secondary' if photo['published'] else 'primary',
-                on_click=toggle_publish, args=(photo,),
-                use_container_width=True,
-            )
-
-
-def people():
-    st.title('👥 People')
-    st.caption('Photographers publishing on PhotoShare.')
-
-    for username, user in store['users'].items():
-        with st.container(border=True):
-            info_col, btn_col = st.columns([3, 1])
-            published = [p for p in store['feed_photos'] if p['author'] == username]
-            total_likes = sum(p['likes'] for p in published)
-            with info_col:
-                st.subheader(f"{user['name']} · @{username}")
-                st.write(user['bio'])
-                st.caption(f'{len(published)} photos · {total_likes} likes')
-            with btn_col:
-                following = username in store['following']
-                st.button(
-                    '✓ Following' if following else '➕ Follow',
-                    key=f'people_follow_{username}',
-                    type='secondary' if following else 'primary',
-                    on_click=toggle_follow, args=(username,),
-                )
-
-
-# -----------------------------------------------------------------------------
-# Navigation
+status = describe_status()
+api_ready = status['api_key'] and status['sdk']
 
 with st.sidebar:
-    st.title('📸 PhotoShare')
-    page = st.radio('Go to', ['Community Feed', 'My Gallery', 'People'])
-    st.divider()
-    st.caption(f"📷 {len(store['my_photos'])} photos in your gallery")
-    st.caption(f"🌍 {sum(1 for p in store['my_photos'] if p['published'])} published by you")
-    st.caption(f"➕ Following {len(store['following'])} people")
+    st.markdown('### ✳️ Clode')
+    if st.button('＋  New chat', use_container_width=True):
+        st.session_state.current = new_chat(store)
+        save_chats(store)
+        st.rerun()
 
-if page == 'Community Feed':
-    community_feed()
-elif page == 'My Gallery':
-    my_gallery()
+    st.markdown('---')
+    options = []
+    if api_ready:
+        options.append('Claude API')
+    if status['local_weights']:
+        options.append('Clode-mini (local)')
+    if not options:
+        options = ['Clode-mini (local)']
+
+    engine = st.radio('Engine', options, index=0, key='engine')
+    model_id = 'claude-opus-5'
+    if engine == 'Claude API':
+        model_id = st.selectbox(
+            'Model', [m for m, _ in API_MODELS],
+            format_func=lambda m: dict(API_MODELS)[m],
+        )
+        effort = st.select_slider('Effort', ['low', 'medium', 'high', 'xhigh'], value='high')
+    else:
+        effort = 'high'
+        temperature = st.slider('Temperature', 0.1, 1.4, 0.75, 0.05)
+
+    st.markdown('---')
+    st.caption('Conversations')
+    for chat_id in store['order'][:25]:
+        chat = store['chats'][chat_id]
+        mark = '●' if chat_id == st.session_state.current else '○'
+        if st.button(f'{mark}  {chat["title"]}', key=f'open-{chat_id}',
+                     use_container_width=True):
+            st.session_state.current = chat_id
+            st.rerun()
+
+    st.markdown('---')
+    pill = lambda ok, text: (
+        f'<span class="clode-pill {"on" if ok else ""}">{"✓" if ok else "○"} {text}</span>'
+    )
+    st.markdown(
+        pill(status['api_key'], 'API key')
+        + ' ' + pill(status['local_weights'], 'local weights'),
+        unsafe_allow_html=True,
+    )
+    if not status['api_key']:
+        st.caption('Set `ANTHROPIC_API_KEY` to chat with the real Claude models. '
+                   'Without it, the locally trained model answers.')
+
+
+# --------------------------------------------------------------------------
+# chat surface
+# --------------------------------------------------------------------------
+
+def search_controls(engine: str) -> bool:
+    """The web-search switch, stated plainly above the conversation.
+
+    It sits here rather than in the sidebar because whether an answer came off
+    the web or out of the model is the single most important thing to know
+    about it, and it should be readable without opening anything.
+    """
+    left, mid, right = st.columns([1, 1, 2.2])
+    with left:
+        on = st.toggle('🌐  Search the web', value=st.session_state.get('web_on', False),
+                       key='web_on')
+    with mid:
+        if on:
+            st.toggle('🔍  Deep search', value=st.session_state.get('deep_on', False),
+                      key='deep_on',
+                      help='Search, read what comes back, then search again on the '
+                           'terms those results introduced.')
+    with right:
+        if not on:
+            st.markdown('<div class="searchline off">Off — answers come only from '
+                        'what the model learned during training.</div>',
+                        unsafe_allow_html=True)
+        elif engine == 'Claude API':
+            st.markdown('<div class="searchline on">On — Claude runs the search itself '
+                        'and cites what it used.</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div class="searchline on">On — the app searches with '
+                f'<b>{websearch.provider_name()}</b> and shows the sources. Clode-mini '
+                'cannot read web pages, so it does not answer these.</div>',
+                unsafe_allow_html=True)
+    return on
+
+
+def _failure_note(exc: Exception) -> str:
+    return (f'⚠️ **The search did not go through.** {exc}\n\n'
+            'This machine may block outbound web requests. Setting '
+            '`BRAVE_API_KEY` or `SERPER_API_KEY` switches provider.')
+
+
+def answer_from_web(query: str, deep: bool = False) -> str:
+    """Search the web and render the findings, attributed to their sources.
+
+    Deep search runs several rounds, each query chosen from the terms the last
+    round's results introduced. Every round is shown as it happens, so what
+    was searched is as visible as what came back.
+    """
+    provider = websearch.provider_name()
+    rounds: list[tuple[str, list]] = []
+    failures: list[Exception] = []
+    label = f'{"Deep search" if deep else "Searching"} with {provider}…'
+
+    with st.status(label, expanded=True) as box:
+        try:
+            if deep:
+                stream = websearch.deep_search(query, rounds=2, limit=4, per_round=2)
+            else:
+                stream = iter([(query, websearch.search(query, limit=4))])
+            for asked, found in stream:
+                if isinstance(found, Exception):
+                    failures.append(found)
+                    st.markdown(f'✗ `{asked}` — {found}')
+                    continue
+                rounds.append((asked, found))
+                st.markdown(f'✓ `{asked}` — {len(found)} results')
+        except websearch.SearchError as exc:
+            failures.append(exc)
+
+        total = sum(len(r) for _, r in rounds)
+        if not total:
+            box.update(label='Search failed', state='error')
+        else:
+            box.update(label=f'{total} results across {len(rounds)} '
+                             f'{"searches" if len(rounds) > 1 else "search"}',
+                       state='complete')
+
+    if not total:
+        message = _failure_note(failures[0]) if failures else \
+            f'The search for “{query}” came back empty.'
+        st.markdown(message)
+        return message
+
+    lines = [f'🌐 **Live from the web** — {provider}, just now', '']
+    n = 0
+    for asked, found in rounds:
+        if len(rounds) > 1:
+            lines.append(f'*searched:* `{asked}`')
+        for r in found:
+            n += 1
+            lines.append(f'**{n}. [{r.title}]({r.url})**  \n'
+                         f'{r.snippet or "No summary was given for this result."}  \n'
+                         f'<span class="src">{r.cite()}</span>\n')
+    if failures:
+        lines.append(f'<span class="src">{len(failures)} of the searches failed; '
+                     'the results above are the ones that came back.</span>\n')
+    lines.append('<span class="src">These are the sources\' words, quoted. Clode-mini '
+                 'cannot read web pages, so it did not write this answer.</span>')
+    body = '\n'.join(lines)
+    st.markdown(body, unsafe_allow_html=True)
+    return body
+
+
+chat = store['chats'][st.session_state.current]
+
+st.markdown('<div class="clode-title">Clo<span>de</span></div>', unsafe_allow_html=True)
+if engine == 'Claude API':
+    st.markdown(
+        f'<div class="clode-sub">Talking to <b>{dict(API_MODELS)[model_id]}</b> '
+        f'at {effort} effort.</div>', unsafe_allow_html=True)
 else:
-    people()
+    detail = ''
+    if status['local_weights']:
+        try:
+            n = get_local_backend(Path('data/clode-mini.npz').stat().st_mtime).n_params
+            detail = f' — {n / 1e6:.1f}M parameters, trained from scratch on this machine'
+        except Exception:
+            detail = ''
+    st.markdown(f'<div class="clode-sub">Talking to <b>Clode-mini</b>{detail}.</div>',
+                unsafe_allow_html=True)
+
+web_on = search_controls(engine)
+st.markdown('<div class="rule"></div>', unsafe_allow_html=True)
+
+for msg in chat['messages']:
+    with st.chat_message(msg['role'], avatar='✳️' if msg['role'] == 'assistant' else '🧑'):
+        st.markdown(msg['content'])
+
+if not chat['messages']:
+    st.info('Ask me something — try "who are you", "what is the capital of Japan", '
+            '"how do I reverse a list in Python", or "what is 12 + 30".')
+
+prompt = st.chat_input('Message Clode…')
+if prompt:
+    chat['messages'].append({'role': 'user', 'content': prompt})
+    if chat['title'] == 'New chat':
+        chat['title'] = title_from(prompt)
+    with st.chat_message('user', avatar='🧑'):
+        st.markdown(prompt)
+
+    history = [Message(m['role'], m['content']) for m in chat['messages']]
+    with st.chat_message('assistant', avatar='✳️'):
+        try:
+            if engine == 'Claude API':
+                backend = AnthropicBackend(model=model_id)
+                system = DEFAULT_SYSTEM
+                if web_on and st.session_state.get('deep_on'):
+                    system += (' Research thoroughly: search, read what you find, '
+                               'then search again on what it raises, before answering. '
+                               'Cite the sources you used.')
+                reply = st.write_stream(
+                    backend.stream(history, system, effort=effort, web_search=web_on))
+            elif web_on:
+                # Clode-mini cannot read web prose, so the app answers from the
+                # source and says so, rather than dressing it up as the model's.
+                reply = answer_from_web(prompt, deep=st.session_state.get('deep_on', False))
+            else:
+                backend = get_local_backend(Path('data/clode-mini.npz').stat().st_mtime)
+                reply = st.write_stream(backend.stream(history, temperature=temperature))
+        except Exception as exc:  # surface the real reason rather than a blank bubble
+            reply = f'⚠️ {type(exc).__name__}: {exc}'
+            st.error(reply)
+
+    chat['messages'].append({'role': 'assistant', 'content': reply})
+    save_chats(store)
+    st.rerun()

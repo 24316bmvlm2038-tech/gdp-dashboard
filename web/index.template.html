@@ -1,0 +1,420 @@
+<title>Clode-mini — a language model that runs in your tab</title>
+
+<style>
+  :root {
+    --bg: #f3f1f6;
+    --surface: #ffffff;
+    --surface-2: #ebe7f1;
+    --text: #201b26;
+    --muted: #6d6478;
+    --line: #ded8e6;
+    --accent: #a8256f;
+    --accent-soft: #f7e6f0;
+    --teal: #16867a;
+    --on-accent: #ffffff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15111a; --surface: #1d1823; --surface-2: #241d2c;
+      --text: #ece7f2; --muted: #9b93a8; --line: #322a3a;
+      --accent: #e879b8; --accent-soft: #2c1f2b; --teal: #4fd1c0; --on-accent: #15111a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15111a; --surface: #1d1823; --surface-2: #241d2c;
+    --text: #ece7f2; --muted: #9b93a8; --line: #322a3a;
+    --accent: #e879b8; --accent-soft: #2c1f2b; --teal: #4fd1c0; --on-accent: #15111a;
+  }
+  :root[data-theme="light"] {
+    --bg: #f3f1f6; --surface: #ffffff; --surface-2: #ebe7f1;
+    --text: #201b26; --muted: #6d6478; --line: #ded8e6;
+    --accent: #a8256f; --accent-soft: #f7e6f0; --teal: #16867a; --on-accent: #ffffff;
+  }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans); line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 2.2rem 1.25rem 4rem; }
+
+  header { display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: baseline;
+           border-bottom: 1px solid var(--line); padding-bottom: 1.1rem; }
+  .wordmark { font-family: var(--mono); font-size: 1.6rem; font-weight: 600;
+              letter-spacing: -.02em; }
+  .wordmark b { color: var(--accent); font-weight: 600; }
+  .thesis { color: var(--muted); font-size: .95rem; max-width: 46ch; }
+  .specs { display: flex; gap: 1.4rem; margin-left: auto; font-family: var(--mono);
+           font-size: .74rem; font-variant-numeric: tabular-nums; }
+  .specs div { display: flex; flex-direction: column; gap: .15rem; }
+  .specs span { color: var(--muted); text-transform: uppercase; letter-spacing: .08em;
+                font-size: .64rem; }
+  .specs strong { font-weight: 600; font-size: .95rem; }
+
+  main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+         gap: 1.5rem; margin-top: 1.5rem; align-items: start; }
+  @media (max-width: 880px) { main { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--surface); border: 1px solid var(--line);
+           border-radius: var(--radius); }
+  .panel-head { font-family: var(--mono); font-size: .68rem; text-transform: uppercase;
+                letter-spacing: .1em; color: var(--muted);
+                padding: .7rem .9rem; border-bottom: 1px solid var(--line); }
+
+  #log { padding: 1rem .9rem; display: flex; flex-direction: column; gap: 1rem;
+         min-height: 340px; max-height: 56vh; overflow-y: auto; }
+  .turn { display: grid; grid-template-columns: 4.2rem minmax(0, 1fr); gap: .8rem; }
+  .who { font-family: var(--mono); font-size: .66rem; text-transform: uppercase;
+         letter-spacing: .09em; color: var(--muted); padding-top: .28rem; }
+  .turn.user .who { color: var(--accent); }
+  .turn.user .body { background: var(--surface-2); border-radius: var(--radius);
+                     padding: .5rem .75rem; }
+  .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .body.pending::after { content: "▌"; color: var(--accent);
+                         animation: blink 1.05s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .body.pending::after { animation: none; } }
+
+  .composer { display: flex; gap: .55rem; padding: .75rem; border-top: 1px solid var(--line); }
+  #box { flex: 1; font: inherit; color: var(--text); background: var(--bg);
+         border: 1px solid var(--line); border-radius: var(--radius);
+         padding: .6rem .75rem; }
+  #box:focus-visible, button:focus-visible { outline: 2px solid var(--accent);
+                                             outline-offset: 2px; }
+  button { font: inherit; font-family: var(--mono); font-size: .8rem;
+           letter-spacing: .03em; padding: .55rem 1.05rem;
+           border-radius: var(--radius); cursor: pointer; }
+  .primary { border: 1px solid var(--accent); background: var(--accent);
+             color: var(--on-accent); }
+  .primary:disabled { opacity: .45; cursor: default; }
+
+  .suggestions { display: flex; flex-wrap: wrap; gap: .4rem; padding: 0 .75rem .8rem; }
+  .chip { font-size: .72rem; padding: .3rem .6rem; background: transparent;
+          border: 1px solid var(--line); color: var(--muted); }
+  .chip:hover { border-color: var(--accent); color: var(--accent); }
+
+  .readout { padding: .9rem; display: flex; flex-direction: column; gap: .55rem; }
+  .bar { display: grid; grid-template-columns: 6.6rem minmax(0, 1fr) 3.1rem;
+         align-items: center; gap: .5rem; font-family: var(--mono); font-size: .74rem;
+         font-variant-numeric: tabular-nums; }
+  .bar .tok { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar .track { height: .62rem; background: var(--surface-2); border-radius: 2px;
+                overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--accent); transition: width .12s linear; }
+  .bar.picked .tok { color: var(--accent); }
+  .bar .pct { text-align: right; color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { .bar .fill { transition: none; } }
+
+  .meters { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem;
+            padding: .9rem; border-top: 1px solid var(--line);
+            font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .meters span { display: block; color: var(--muted); text-transform: uppercase;
+                 letter-spacing: .08em; font-size: .6rem; }
+  .meters strong { font-size: 1.05rem; font-weight: 600; }
+
+  figure { margin: 0; padding: .9rem; border-top: 1px solid var(--line); }
+  figcaption { font-family: var(--mono); font-size: .68rem; color: var(--muted);
+               text-transform: uppercase; letter-spacing: .1em; margin-bottom: .5rem; }
+  #curve { width: 100%; height: 92px; display: block; }
+  .curve-note { font-family: var(--mono); font-size: .72rem; color: var(--muted);
+                margin-top: .4rem; font-variant-numeric: tabular-nums; }
+
+  .websearch { padding: .9rem; border-top: 1px solid var(--line); font-size: .84rem;
+               color: var(--muted); display: flex; flex-direction: column; gap: .6rem; }
+  .ws-head { font-family: var(--mono); font-size: .68rem; text-transform: uppercase;
+             letter-spacing: .1em; color: var(--text); display: flex;
+             align-items: center; gap: .45rem; }
+  .ws-dot { width: .5rem; height: .5rem; border-radius: 50%;
+            border: 1px solid var(--muted); flex: none; }
+  .websearch p, .websearch ul { margin: 0; }
+  .websearch ul { padding-left: 1.05rem; display: flex; flex-direction: column;
+                  gap: .35rem; }
+  .websearch b { color: var(--text); }
+  .websearch pre { margin: 0; overflow-x: auto; background: var(--surface-2);
+                   border-radius: 6px; padding: .5rem .6rem; }
+  .websearch code { font-family: var(--mono); font-size: .74rem; color: var(--teal); }
+
+  .notes { margin-top: 1.5rem; border-top: 1px solid var(--line); padding-top: 1.1rem;
+           display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+           gap: 1.2rem; font-size: .88rem; color: var(--muted); }
+  .notes h2 { font-family: var(--mono); font-size: .68rem; text-transform: uppercase;
+              letter-spacing: .1em; color: var(--text); margin: 0 0 .35rem; }
+  .notes p { margin: 0; }
+  .notes code { font-family: var(--mono); font-size: .82em; color: var(--teal); }
+
+  #boot { position: fixed; inset: 0; background: var(--bg); display: grid;
+          place-items: center; font-family: var(--mono); font-size: .82rem;
+          color: var(--muted); z-index: 9; }
+</style>
+
+<div id="boot">unpacking 4.9M weights…</div>
+
+<div class="wrap">
+  <header>
+    <div>
+      <div class="wordmark">clode<b>-mini</b></div>
+      <p class="thesis">A language model built and trained from scratch — no PyTorch,
+        no API. The weights are embedded in this page and every reply below is
+        computed in your browser.</p>
+    </div>
+    <div class="specs">
+      <div><span>params</span><strong id="s-params">—</strong></div>
+      <div><span>layers</span><strong id="s-layers">—</strong></div>
+      <div><span>context</span><strong id="s-ctx">—</strong></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="panel-head">conversation</div>
+      <div id="log"></div>
+      <div class="suggestions" id="chips"></div>
+      <form class="composer" id="form">
+        <input id="box" autocomplete="off" placeholder="Ask Clode-mini something…" />
+        <button id="send" class="primary" type="submit">Send</button>
+      </form>
+    </section>
+
+    <aside class="panel">
+      <div class="panel-head">next-token distribution</div>
+      <div class="readout" id="dist"></div>
+      <div class="meters">
+        <div><span>tokens/s</span><strong id="m-speed">—</strong></div>
+        <div><span>generated</span><strong id="m-count">0</strong></div>
+        <div><span>context</span><strong id="m-ctx">0%</strong></div>
+      </div>
+      <figure>
+        <figcaption>training — validation loss</figcaption>
+        <canvas id="curve" aria-label="Validation loss falling across training steps"></canvas>
+        <div class="curve-note" id="curve-note">—</div>
+      </figure>
+
+      <section class="websearch">
+        <div class="ws-head"><span class="ws-dot" aria-hidden="true"></span>
+          web search — off on this page</div>
+        <p>Everything here runs inside your tab. A published page like this one is
+          sandboxed and cannot make network requests: nothing you type leaves the
+          browser, and nothing can be fetched into it. Every answer above comes from
+          the weights embedded in this file.</p>
+        <p>Search lives in the full app, where there is a real network. It has two
+          modes, and the app always states which one you are in:</p>
+        <ul>
+          <li><b>With Claude</b> — Claude runs the search itself and cites what it used.</li>
+          <li><b>With Clode-mini</b> — the app searches (DuckDuckGo by default; Brave or
+            Serper with a key) and shows the sources. Clode-mini has a 6,658 word
+            vocabulary and a 128 token context, so it cannot read a web page and does
+            not write those answers.</li>
+        </ul>
+        <pre><code>streamlit run streamlit_app.py</code></pre>
+      </section>
+    </aside>
+  </main>
+
+  <div class="notes">
+    <div>
+      <h2>What it knows</h2>
+      <p>Trained on a generated corpus of chat exchanges — 80 countries with their
+        capitals, languages and currencies, chemical elements, arithmetic, unit facts,
+        Python how-tos, definitions and its own persona, from a 3.1M token corpus
+        with a 6,658 word vocabulary. It answers <strong>94%</strong> of a held-out
+        question set correctly — every category except arithmetic is perfect. Outside
+        that corpus it invents things confidently: it is roughly <strong>0.004%</strong>
+        the size of a frontier model, and it cannot search the web.</p>
+    </div>
+    <div>
+      <h2>How it works here</h2>
+      <p>The weights ship int8-quantised and are dequantised on load. Each token is one
+        pass over a KV cache, so replies stream at reading speed on a laptop CPU.
+        Nothing is sent anywhere — turn off your network and it still answers.</p>
+    </div>
+    <div>
+      <h2>How it was made</h2>
+      <p>Tokenizer, transformer, the hand-derived backward pass, AdamW and the training
+        loop are all written from scratch in NumPy; every gradient is checked against
+        finite differences in <code>tests/test_model.py</code>. It was trained in
+        stages on a growing corpus, each stage warm-started from the last — the curve
+        above is the first stage, taking it from random initialisation to a working
+        model.</p>
+    </div>
+  </div>
+</div>
+
+<script>/*__CLODE_JS__*/</script>
+<script>
+(function () {
+  'use strict';
+  const PAYLOAD = /*__PAYLOAD__*/;
+  const HISTORY = /*__HISTORY__*/;
+
+  const $ = (id) => document.getElementById(id);
+  const log = $('log'), dist = $('dist');
+  let model = null, busy = false;
+  const chat = [];
+
+  const SUGGESTIONS = [
+    'who are you',
+    'what is the capital of japan',
+    'what is 12 + 30',
+    'how do i reverse a list in python',
+    'what is a transformer',
+    'what language do they speak in brazil',
+    'what is the symbol for gold',
+    'can you browse the internet',
+  ];
+
+  function turn(role, text, pending) {
+    const el = document.createElement('div');
+    el.className = 'turn ' + role;
+    el.innerHTML = '<div class="who"></div><div class="body"></div>';
+    el.querySelector('.who').textContent = role === 'user' ? 'you' : 'clode';
+    const body = el.querySelector('.body');
+    body.textContent = text;
+    if (pending) body.classList.add('pending');
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return body;
+  }
+
+  function renderDistribution(logits, picked) {
+    const V = model.cfg.vocab_size;
+    const probs = Float64Array.from(logits.subarray(0, V));
+    let max = -Infinity;
+    for (let i = 0; i < V; i++) if (probs[i] > max) max = probs[i];
+    let sum = 0;
+    for (let i = 0; i < V; i++) { probs[i] = Math.exp(probs[i] - max); sum += probs[i]; }
+    for (let i = 0; i < V; i++) probs[i] /= sum;
+
+    const top = Array.from({ length: V }, (_, i) => i)
+      .sort((a, b) => probs[b] - probs[a]).slice(0, 6);
+    dist.innerHTML = '';
+    for (const id of top) {
+      const row = document.createElement('div');
+      row.className = 'bar' + (id === picked ? ' picked' : '');
+      const label = model.tok.itos[id].replace(/^<\|(.+)\|>$/, '⟨$1⟩');
+      row.innerHTML = '<div class="tok"></div><div class="track"><div class="fill">'
+        + '</div></div><div class="pct"></div>';
+      row.querySelector('.tok').textContent = label;
+      row.querySelector('.fill').style.width = (probs[id] * 100).toFixed(1) + '%';
+      row.querySelector('.pct').textContent = (probs[id] * 100).toFixed(1) + '%';
+      dist.appendChild(row);
+    }
+  }
+
+  const idle = () => new Promise((r) => setTimeout(r, 0));
+
+  async function reply(body) {
+    const ids = model.buildPrompt(chat);
+    let { cache, logits } = model.prefill(ids);
+    const produced = [];
+    const started = performance.now();
+    let text = '';
+
+    for (let n = 0; n < 72; n++) {
+      const next = model.sample(logits, ids.concat(produced),
+                               { temperature: 0.75, topP: 0.9, repetitionPenalty: 1.15 });
+      renderDistribution(logits, next);
+      if (next === model.tok.end || next === model.tok.user || next === model.tok.assistant) break;
+      produced.push(next);
+
+      text = model.tok.decode(produced);
+      body.textContent = text;
+      log.scrollTop = log.scrollHeight;
+      $('m-count').textContent = produced.length;
+      $('m-speed').textContent =
+        (produced.length / ((performance.now() - started) / 1000)).toFixed(1);
+      $('m-ctx').textContent =
+        Math.min(100, Math.round((cache.length / model.cfg.n_ctx) * 100)) + '%';
+
+      await idle();
+      if (cache.length >= model.cfg.n_ctx) {
+        ({ cache, logits } = model.prefill(ids.concat(produced).slice(-(model.cfg.n_ctx >> 1))));
+      } else {
+        logits = model.step(next, cache.length, cache);
+      }
+    }
+
+    body.classList.remove('pending');
+    if (!text) text = 'I have nothing useful for that one.';
+    body.textContent = text;
+    return text;
+  }
+
+  async function ask(text) {
+    if (busy || !text.trim()) return;
+    busy = true; $('send').disabled = true;
+    turn('user', text);
+    chat.push({ role: 'user', content: text });
+    const body = turn('assistant', '', true);
+    await idle();
+    const answer = await reply(body);
+    chat.push({ role: 'assistant', content: answer });
+    busy = false; $('send').disabled = false;
+    $('box').focus();
+  }
+
+  function drawCurve() {
+    const canvas = $('curve');
+    if (!HISTORY.length) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const css = getComputedStyle(document.documentElement);
+    const accent = css.getPropertyValue('--accent').trim();
+    const line = css.getPropertyValue('--line').trim();
+
+    const xs = HISTORY.map((d) => d.step), ys = HISTORY.map((d) => d.val_loss);
+    const maxX = Math.max(...xs), maxY = Math.max(...ys), minY = Math.min(...ys);
+    const px = (s) => (s / maxX) * (w - 8) + 4;
+    const py = (v) => h - 6 - ((v - minY) / Math.max(maxY - minY, 1e-6)) * (h - 16);
+
+    ctx.strokeStyle = line; ctx.lineWidth = 1;
+    for (let i = 0; i <= 2; i++) {
+      const y = 6 + (i * (h - 12)) / 2;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    ctx.beginPath();
+    HISTORY.forEach((d, i) => (i ? ctx.lineTo(px(d.step), py(d.val_loss))
+                                 : ctx.moveTo(px(d.step), py(d.val_loss))));
+    ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+    const last = HISTORY[HISTORY.length - 1];
+    ctx.beginPath(); ctx.arc(px(last.step), py(last.val_loss), 3, 0, Math.PI * 2);
+    ctx.fillStyle = accent; ctx.fill();
+
+    $('curve-note').textContent =
+      `${ys[0].toFixed(2)} → ${last.val_loss.toFixed(2)} over ${last.step.toLocaleString()} steps`
+      + ` · perplexity ${Math.exp(last.val_loss).toFixed(1)}`;
+  }
+
+  function boot() {
+    model = new Clode.Model(PAYLOAD);
+    $('s-params').textContent = (model.nParams / 1e6).toFixed(2) + 'M';
+    $('s-layers').textContent = model.cfg.n_layer + ' × ' + model.cfg.n_embd;
+    $('s-ctx').textContent = model.cfg.n_ctx + ' tok';
+
+    for (const s of SUGGESTIONS) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'chip'; b.textContent = s;
+      b.addEventListener('click', () => ask(s));
+      $('chips').appendChild(b);
+    }
+    $('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = $('box').value; $('box').value = '';
+      ask(v);
+    });
+
+    drawCurve();
+    window.addEventListener('resize', drawCurve);
+    turn('assistant', 'I am Clode-mini. Ask me something — the bars on the right are '
+       + 'my actual next-token probabilities as I answer.');
+    $('boot').remove();
+  }
+
+  setTimeout(boot, 30);
+})();
+</script>
